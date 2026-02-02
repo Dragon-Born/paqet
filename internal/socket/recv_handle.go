@@ -12,7 +12,13 @@ import (
 )
 
 type RecvHandle struct {
-	handle *pcap.Handle
+	handle  *pcap.Handle
+	eth     layers.Ethernet
+	ipv4    layers.IPv4
+	ipv6    layers.IPv6
+	tcp     layers.TCP
+	parser  *gopacket.DecodingLayerParser
+	decoded []gopacket.LayerType
 }
 
 func NewRecvHandle(cfg *conf.Network) (*RecvHandle, error) {
@@ -33,7 +39,18 @@ func NewRecvHandle(cfg *conf.Network) (*RecvHandle, error) {
 		return nil, fmt.Errorf("failed to set BPF filter: %w", err)
 	}
 
-	return &RecvHandle{handle: handle}, nil
+	h := &RecvHandle{
+		handle:  handle,
+		decoded: make([]gopacket.LayerType, 0, 4),
+	}
+
+	h.parser = gopacket.NewDecodingLayerParser(
+		layers.LayerTypeEthernet,
+		&h.eth, &h.ipv4, &h.ipv6, &h.tcp,
+	)
+	h.parser.IgnoreUnsupported = true
+
+	return h, nil
 }
 
 func (h *RecvHandle) Read() ([]byte, net.Addr, error) {
@@ -43,35 +60,28 @@ func (h *RecvHandle) Read() ([]byte, net.Addr, error) {
 	}
 
 	addr := &net.UDPAddr{}
-	p := gopacket.NewPacket(data, layers.LayerTypeEthernet, gopacket.NoCopy)
+	h.decoded = h.decoded[:0]
 
-	netLayer := p.NetworkLayer()
-	if netLayer == nil {
-		return nil, addr, nil
-	}
-	switch netLayer.LayerType() {
-	case layers.LayerTypeIPv4:
-		addr.IP = netLayer.(*layers.IPv4).SrcIP
-	case layers.LayerTypeIPv6:
-		addr.IP = netLayer.(*layers.IPv6).SrcIP
+	if err := h.parser.DecodeLayers(data, &h.decoded); err != nil {
+		// Ignore unsupported layer errors; we only need IP+TCP
 	}
 
-	trLayer := p.TransportLayer()
-	if trLayer == nil {
-		return nil, addr, nil
-	}
-	switch trLayer.LayerType() {
-	case layers.LayerTypeTCP:
-		addr.Port = int(trLayer.(*layers.TCP).SrcPort)
-	case layers.LayerTypeUDP:
-		addr.Port = int(trLayer.(*layers.UDP).SrcPort)
+	for _, typ := range h.decoded {
+		switch typ {
+		case layers.LayerTypeIPv4:
+			addr.IP = h.ipv4.SrcIP
+		case layers.LayerTypeIPv6:
+			addr.IP = h.ipv6.SrcIP
+		case layers.LayerTypeTCP:
+			addr.Port = int(h.tcp.SrcPort)
+		}
 	}
 
-	appLayer := p.ApplicationLayer()
-	if appLayer == nil {
+	payload := h.tcp.Payload
+	if len(payload) == 0 {
 		return nil, addr, nil
 	}
-	return appLayer.Payload(), addr, nil
+	return payload, addr, nil
 }
 
 func (h *RecvHandle) Close() {

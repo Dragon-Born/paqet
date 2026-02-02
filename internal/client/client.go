@@ -5,7 +5,6 @@ import (
 	"paqet/internal/conf"
 	"paqet/internal/flog"
 	"paqet/internal/pkg/iterator"
-	"paqet/internal/tnet"
 	"sync"
 )
 
@@ -20,7 +19,7 @@ func New(cfg *conf.Conf) (*Client, error) {
 	c := &Client{
 		cfg:     cfg,
 		iter:    &iterator.Iterator[*timedConn]{},
-		udpPool: &udpPool{strms: make(map[uint64]tnet.Strm)},
+		udpPool: &udpPool{},
 	}
 	return c, nil
 }

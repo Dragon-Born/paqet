@@ -7,7 +7,7 @@ import (
 	"paqet/internal/protocol"
 	"paqet/internal/socket"
 	"paqet/internal/tnet"
-	"paqet/internal/tnet/kcp"
+	"paqet/internal/transport"
 	"time"
 )
 
@@ -36,7 +36,7 @@ func (tc *timedConn) createConn() (tnet.Conn, error) {
 		return nil, fmt.Errorf("could not create raw packet conn: %w", err)
 	}
 
-	conn, err := kcp.Dial(tc.cfg.Server.Addr, tc.cfg.Transport.KCP, pConn)
+	conn, err := transport.Dial(tc.cfg.Server.Addr, &tc.cfg.Transport, pConn)
 	if err != nil {
 		return nil, err
 	}

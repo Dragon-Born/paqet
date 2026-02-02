@@ -2,6 +2,9 @@ package iterator
 
 import "sync/atomic"
 
+// Iterator provides lock-free round-robin iteration over a fixed set of items.
+// Items must not be modified after the Iterator is first used.
+// The index is atomically incremented on each call to Next.
 type Iterator[T any] struct {
 	Items []T
 	index atomic.Uint64

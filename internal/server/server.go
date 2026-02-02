@@ -9,7 +9,7 @@ import (
 	"paqet/internal/flog"
 	"paqet/internal/socket"
 	"paqet/internal/tnet"
-	"paqet/internal/tnet/kcp"
+	"paqet/internal/transport"
 	"sync"
 	"syscall"
 )
@@ -18,11 +18,13 @@ type Server struct {
 	cfg   *conf.Conf
 	pConn *socket.PacketConn
 	wg    sync.WaitGroup
+	sem   chan struct{}
 }
 
 func New(cfg *conf.Conf) (*Server, error) {
 	s := &Server{
 		cfg: cfg,
+		sem: make(chan struct{}, 1024), // max concurrent handlers
 	}
 
 	return s, nil
@@ -45,9 +47,9 @@ func (s *Server) Start() error {
 	}
 	s.pConn = pConn
 
-	listener, err := kcp.Listen(s.cfg.Transport.KCP, pConn)
+	listener, err := transport.Listen(&s.cfg.Transport, pConn)
 	if err != nil {
-		return fmt.Errorf("could not start KCP listener: %w", err)
+		return fmt.Errorf("could not start %s listener: %w", s.cfg.Transport.Protocol, err)
 	}
 	defer listener.Close()
 	flog.Infof("Server started - listening for packets on :%d", s.cfg.Listen.Addr.Port)

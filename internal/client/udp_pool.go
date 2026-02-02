@@ -7,20 +7,16 @@ import (
 )
 
 type udpPool struct {
-	strms map[uint64]tnet.Strm
-	mu    sync.RWMutex
+	strms sync.Map // uint64 -> tnet.Strm
 }
 
 func (p *udpPool) delete(key uint64) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if strm, exists := p.strms[key]; exists {
+	if v, loaded := p.strms.LoadAndDelete(key); loaded {
+		strm := v.(tnet.Strm)
 		flog.Debugf("closing UDP session stream %d", strm.SID())
 		strm.Close()
 	} else {
 		flog.Debugf("UDP session key %d not found for close", key)
 	}
-	delete(p.strms, key)
-
 	return nil
 }

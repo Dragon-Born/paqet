@@ -35,7 +35,7 @@ network:
 
 # Transport protocol configuration
 transport:
-  protocol: "kcp"  # Transport protocol (currently only "kcp" supported)
+  protocol: "kcp"  # Transport protocol: "kcp", "quic", or "udp"
   conn: 1          # Number of connections (1-256, default: 1)
   
   # KCP protocol settings
@@ -83,8 +83,25 @@ transport:
 
 # Optional Forward Error Correction (FEC) - currently disabled
 # Use these only if you need FEC for very lossy networks:
-#   dshard: 10    # Data shards for FEC  
+#   dshard: 10    # Data shards for FEC
 #   pshard: 3     # Parity shards for FEC
+
+  # QUIC transport settings (used when protocol="quic")
+  # quic:
+  #   key: "your-secret-key-here"   # Shared secret for deterministic TLS cert (must match client)
+  #   alpn: "h3"                    # ALPN protocol (default: "h3" to mimic HTTP/3)
+  #   max_streams: 256              # Max concurrent streams (1-65535)
+  #   idle_timeout: 30s             # Connection idle timeout (1s-5m)
+  #   # cert_file: "cert.pem"      # Optional: custom TLS certificate
+  #   # key_file: "key.pem"        # Optional: custom TLS private key
+
+  # Raw UDP transport settings (used when protocol="udp")
+  # WARNING: No reliability layer - packet loss causes stream errors
+  # udp:
+  #   key: "your-secret-key-here"   # Encryption key (must match client)
+  #   block: "aes"                  # Encryption: aes, salsa20, none, etc.
+  #   smuxbuf: 4194304              # 4MB smux buffer
+  #   streambuf: 2097152            # 2MB stream buffer
 
 # Important: Server Firewall Configuration Required!
 # 

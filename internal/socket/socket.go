@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"paqet/internal/conf"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -15,8 +16,8 @@ type PacketConn struct {
 	cfg           *conf.Network
 	sendHandle    *SendHandle
 	recvHandle    *RecvHandle
-	readDeadline  atomic.Value
-	writeDeadline atomic.Value
+	readDeadline  atomic.Int64 // UnixNano, 0 means no deadline
+	writeDeadline atomic.Int64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -50,21 +51,23 @@ func New(ctx context.Context, cfg *conf.Network) (*PacketConn, error) {
 	return conn, nil
 }
 
-func (c *PacketConn) ReadFrom(data []byte) (n int, addr net.Addr, err error) {
-	var timer *time.Timer
-	var deadline <-chan time.Time
-	if d, ok := c.readDeadline.Load().(time.Time); ok && !d.IsZero() {
-		timer = time.NewTimer(time.Until(d))
-		defer timer.Stop()
-		deadline = timer.C
+func (c *PacketConn) checkDeadline(dl *atomic.Int64) error {
+	d := dl.Load()
+	if d != 0 && time.Now().UnixNano() >= d {
+		return os.ErrDeadlineExceeded
 	}
+	return nil
+}
 
+func (c *PacketConn) ReadFrom(data []byte) (n int, addr net.Addr, err error) {
 	select {
 	case <-c.ctx.Done():
 		return 0, nil, c.ctx.Err()
-	case <-deadline:
-		return 0, nil, os.ErrDeadlineExceeded
 	default:
+	}
+
+	if err := c.checkDeadline(&c.readDeadline); err != nil {
+		return 0, nil, err
 	}
 
 	payload, addr, err := c.recvHandle.Read()
@@ -77,20 +80,14 @@ func (c *PacketConn) ReadFrom(data []byte) (n int, addr net.Addr, err error) {
 }
 
 func (c *PacketConn) WriteTo(data []byte, addr net.Addr) (n int, err error) {
-	var timer *time.Timer
-	var deadline <-chan time.Time
-	if d, ok := c.writeDeadline.Load().(time.Time); ok && !d.IsZero() {
-		timer = time.NewTimer(time.Until(d))
-		defer timer.Stop()
-		deadline = timer.C
-	}
-
 	select {
 	case <-c.ctx.Done():
 		return 0, c.ctx.Err()
-	case <-deadline:
-		return 0, os.ErrDeadlineExceeded
 	default:
+	}
+
+	if err := c.checkDeadline(&c.writeDeadline); err != nil {
+		return 0, err
 	}
 
 	daddr, ok := addr.(*net.UDPAddr)
@@ -109,38 +106,43 @@ func (c *PacketConn) WriteTo(data []byte, addr net.Addr) (n int, err error) {
 func (c *PacketConn) Close() error {
 	c.cancel()
 
-	if c.sendHandle != nil {
-		go c.sendHandle.Close()
-	}
-	if c.recvHandle != nil {
-		go c.recvHandle.Close()
-	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if c.sendHandle != nil {
+			c.sendHandle.Close()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if c.recvHandle != nil {
+			c.recvHandle.Close()
+		}
+	}()
+	wg.Wait()
 
 	return nil
 }
 
 func (c *PacketConn) LocalAddr() net.Addr {
 	return nil
-	// return &net.UDPAddr{
-	// 	IP:   append([]byte(nil), c.cfg.PrimaryAddr().IP...),
-	// 	Port: c.cfg.PrimaryAddr().Port,
-	// 	Zone: c.cfg.PrimaryAddr().Zone,
-	// }
 }
 
 func (c *PacketConn) SetDeadline(t time.Time) error {
-	c.readDeadline.Store(t)
-	c.writeDeadline.Store(t)
+	ns := deadlineToNano(t)
+	c.readDeadline.Store(ns)
+	c.writeDeadline.Store(ns)
 	return nil
 }
 
 func (c *PacketConn) SetReadDeadline(t time.Time) error {
-	c.readDeadline.Store(t)
+	c.readDeadline.Store(deadlineToNano(t))
 	return nil
 }
 
 func (c *PacketConn) SetWriteDeadline(t time.Time) error {
-	c.writeDeadline.Store(t)
+	c.writeDeadline.Store(deadlineToNano(t))
 	return nil
 }
 
@@ -150,4 +152,11 @@ func (c *PacketConn) SetDSCP(dscp int) error {
 
 func (c *PacketConn) SetClientTCPF(addr net.Addr, f []conf.TCPF) {
 	c.sendHandle.setClientTCPF(addr, f)
+}
+
+func deadlineToNano(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
 }

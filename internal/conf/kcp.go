@@ -33,7 +33,7 @@ type KCP struct {
 
 func (k *KCP) setDefaults(role string) {
 	if k.Mode == "" {
-		k.Mode = "fast"
+		k.Mode = "fast3"
 	}
 	if k.MTU == 0 {
 		k.MTU = 1350
@@ -76,7 +76,7 @@ func (k *KCP) setDefaults(role string) {
 func (k *KCP) validate() []error {
 	var errors []error
 
-	validModes := []string{"normal", "fast", "fast2", "fast3", "manual"}
+	validModes := []string{"normal", "fast", "fast2", "fast3", "fast4", "manual"}
 	if !slices.Contains(validModes, k.Mode) {
 		errors = append(errors, fmt.Errorf("KCP mode must be one of: %v", validModes))
 	}

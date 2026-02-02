@@ -21,7 +21,15 @@ func (s *Server) handleConn(ctx context.Context, conn tnet.Conn) {
 			flog.Errorf("failed to accept stream on %s: %v", conn.RemoteAddr(), err)
 			return
 		}
+		// Acquire semaphore to limit concurrent stream handlers
+		select {
+		case s.sem <- struct{}{}:
+		case <-ctx.Done():
+			strm.Close()
+			return
+		}
 		s.wg.Go(func() {
+			defer func() { <-s.sem }()
 			defer strm.Close()
 			if err := s.handleStrm(ctx, strm); err != nil {
 				flog.Errorf("stream %d from %s closed with error: %v", strm.SID(), strm.RemoteAddr(), err)

@@ -97,5 +97,9 @@ func (n *Addr) validate() []error {
 	}
 	n.Router = hwAddr
 
+	// Clear raw strings after parsing to free memory
+	n.Addr_ = ""
+	n.RouterMac_ = ""
+
 	return errors
 }

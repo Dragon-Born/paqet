@@ -24,6 +24,9 @@ func aplConf(conn *kcp.UDPSession, cfg *conf.KCP) {
 	case "fast3":
 		noDelay, interval, resend, noCongestion = 1, 10, 2, 1
 		wDelay, ackNoDelay = false, true
+	case "fast4":
+		noDelay, interval, resend, noCongestion = 1, 5, 2, 1
+		wDelay, ackNoDelay = false, true
 	case "manual":
 		noDelay, interval, resend, noCongestion = cfg.NoDelay, cfg.Interval, cfg.Resend, cfg.NoCongestion
 		wDelay, ackNoDelay = cfg.WDelay, cfg.AckNoDelay
@@ -40,8 +43,8 @@ func aplConf(conn *kcp.UDPSession, cfg *conf.KCP) {
 func smuxConf(cfg *conf.KCP) *smux.Config {
 	var sconf = smux.DefaultConfig()
 	sconf.Version = 2
-	sconf.KeepAliveInterval = 2 * time.Second
-	sconf.KeepAliveTimeout = 8 * time.Second
+	sconf.KeepAliveInterval = 1 * time.Second
+	sconf.KeepAliveTimeout = 5 * time.Second
 	sconf.MaxFrameSize = 65535
 	sconf.MaxReceiveBuffer = cfg.Smuxbuf
 	sconf.MaxStreamBuffer = cfg.Streambuf

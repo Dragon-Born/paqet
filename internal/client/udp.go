@@ -2,20 +2,18 @@ package client
 
 import (
 	"paqet/internal/flog"
-	"paqet/internal/pkg/hash"
 	"paqet/internal/protocol"
+	"paqet/internal/pkg/hash"
 	"paqet/internal/tnet"
 )
 
 func (c *Client) UDP(lAddr, tAddr string) (tnet.Strm, bool, uint64, error) {
 	key := hash.AddrPair(lAddr, tAddr)
-	c.udpPool.mu.RLock()
-	if strm, exists := c.udpPool.strms[key]; exists {
-		c.udpPool.mu.RUnlock()
+	if v, ok := c.udpPool.strms.Load(key); ok {
+		strm := v.(tnet.Strm)
 		flog.Debugf("reusing UDP stream %d for %s -> %s", strm.SID(), lAddr, tAddr)
 		return strm, false, key, nil
 	}
-	c.udpPool.mu.RUnlock()
 
 	strm, err := c.newStrm()
 	if err != nil {
@@ -37,9 +35,14 @@ func (c *Client) UDP(lAddr, tAddr string) (tnet.Strm, bool, uint64, error) {
 		return nil, false, 0, err
 	}
 
-	c.udpPool.mu.Lock()
-	c.udpPool.strms[key] = strm
-	c.udpPool.mu.Unlock()
+	// Use LoadOrStore to handle concurrent insertions atomically
+	if existing, loaded := c.udpPool.strms.LoadOrStore(key, strm); loaded {
+		// Another goroutine already inserted, close our stream and use existing
+		strm.Close()
+		existingStrm := existing.(tnet.Strm)
+		flog.Debugf("reusing UDP stream %d for %s -> %s (concurrent insert)", existingStrm.SID(), lAddr, tAddr)
+		return existingStrm, false, key, nil
+	}
 
 	flog.Debugf("established UDP stream %d for %s -> %s", strm.SID(), lAddr, tAddr)
 	return strm, true, key, nil
