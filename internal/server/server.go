@@ -52,7 +52,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("could not start %s listener: %w", s.cfg.Transport.Protocol, err)
 	}
 	defer listener.Close()
-	flog.Infof("Server started - listening for packets on :%d", s.cfg.Listen.Addr.Port)
+	flog.Infof("Server started - listening for packets on :%d (protocol: %s)", s.cfg.Listen.Addr.Port, s.cfg.Transport.Protocol)
 
 	s.wg.Go(func() {
 		s.listen(ctx, listener)

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"paqet/internal/protocol"
-	"paqet/internal/socket"
 	"paqet/internal/tnet"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 )
 
 type Conn struct {
-	PacketConn *socket.PacketConn
+	PacketConn net.PacketConn
 	UDPSession *kcp.UDPSession
 	Session    *smux.Session
 }

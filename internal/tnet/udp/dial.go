@@ -5,14 +5,13 @@ import (
 	"net"
 	"paqet/internal/conf"
 	"paqet/internal/flog"
-	"paqet/internal/socket"
 	"paqet/internal/tnet"
 
 	"github.com/xtaci/smux"
 )
 
 // Dial creates a raw UDP connection with smux multiplexing to the given address.
-func Dial(addr *net.UDPAddr, cfg *conf.UDP, pConn *socket.PacketConn) (tnet.Conn, error) {
+func Dial(addr *net.UDPAddr, cfg *conf.UDP, pConn net.PacketConn) (tnet.Conn, error) {
 	cipher, err := NewCipher(cfg.Block)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create UDP cipher: %w", err)

@@ -12,15 +12,16 @@ import (
 )
 
 type timedConn struct {
-	cfg    *conf.Conf
-	conn   tnet.Conn
-	expire time.Time
-	ctx    context.Context
+	cfg      *conf.Conf
+	conn     tnet.Conn
+	expire   time.Time
+	ctx      context.Context
+	protocol string // resolved protocol name
 }
 
-func newTimedConn(ctx context.Context, cfg *conf.Conf) (*timedConn, error) {
+func newTimedConn(ctx context.Context, cfg *conf.Conf, proto string) (*timedConn, error) {
 	var err error
-	tc := timedConn{cfg: cfg, ctx: ctx}
+	tc := timedConn{cfg: cfg, ctx: ctx, protocol: proto}
 	tc.conn, err = tc.createConn()
 	if err != nil {
 		return nil, err
@@ -36,12 +37,21 @@ func (tc *timedConn) createConn() (tnet.Conn, error) {
 		return nil, fmt.Errorf("could not create raw packet conn: %w", err)
 	}
 
-	conn, err := transport.Dial(tc.cfg.Server.Addr, &tc.cfg.Transport, pConn)
+	var conn tnet.Conn
+	if tc.cfg.Transport.Protocol == "auto" {
+		// In auto mode, use tagged connection with the probed protocol.
+		conn, err = transport.DialProto(tc.protocol, tc.cfg.Server.Addr, &tc.cfg.Transport, pConn)
+	} else {
+		conn, err = transport.Dial(tc.cfg.Server.Addr, &tc.cfg.Transport, pConn)
+	}
 	if err != nil {
+		pConn.Close()
 		return nil, err
 	}
 	err = tc.sendTCPF(conn)
 	if err != nil {
+		conn.Close()
+		pConn.Close()
 		return nil, err
 	}
 	return conn, nil

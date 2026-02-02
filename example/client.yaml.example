@@ -47,7 +47,11 @@ server:
 
 # Transport protocol configuration
 transport:
-  protocol: "kcp"  # Transport protocol: "kcp", "quic", or "udp"
+  protocol: "kcp"  # Transport protocol: "kcp", "quic", "udp", or "auto"
+                   # "auto" mode: client probes all configured protocols
+                   # and selects the one with lowest RTT.
+                   # Requires at least 2 protocol sections configured.
+                   # Server must also use "auto" to accept all protocols.
   conn: 1          # Number of connections (1-256, default: 1)
 
   # KCP protocol settings

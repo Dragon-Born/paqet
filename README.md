@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/badge/go-1.25+-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-`paqet` is a bidirectional Packet-level proxy built using raw sockets in Go. It forwards traffic from a local client to a remote server, which then connects to target services. By operating at the packet level, it completely bypasses the host operating system's TCP/IP stack and supports multiple pluggable transport protocols (KCP, QUIC, raw UDP) for secure, reliable transport.
+`paqet` is a bidirectional Packet-level proxy built using raw sockets in Go. It forwards traffic from a local client to a remote server, which then connects to target services. By operating at the packet level, it completely bypasses the host operating system's TCP/IP stack and supports multiple pluggable transport protocols (KCP, QUIC, raw UDP) for secure, reliable transport. In **auto** mode, the server accepts all protocols simultaneously on a single port while the client probes each and selects the fastest.
 
 > **⚠️ Development Status Notice**
 >
@@ -38,6 +38,7 @@ The system operates in three layers: raw TCP packet injection, encrypted transpo
 - **KCP** — Reliable transport optimized for high-loss or unpredictable networks, using aggressive retransmission, forward error correction, and symmetric encryption. Best for real-time applications where low latency is critical. Supports preset modes (normal, fast, fast2, fast3) and a manual mode for fine-grained parameter tuning.
 - **QUIC** — TLS-based transport with native stream multiplexing. Uses a shared secret for deterministic TLS certificate generation, with ALPN set to `h3` by default to mimic HTTP/3 traffic.
 - **Raw UDP** — Minimal overhead transport using smux for stream multiplexing. No reliability layer — packet loss causes stream errors. Best for controlled network environments.
+- **Auto** — Multi-protocol mode. The server runs all configured protocols simultaneously on a single port using a 1-byte protocol tag demuxer. The client probes each protocol by measuring RTT and selects the fastest. Requires at least two protocol sections configured on both sides.
 
 ## Getting Started
 
@@ -131,7 +132,7 @@ server:
 
 # Transport protocol configuration
 transport:
-  protocol: "kcp" # Transport protocol: "kcp", "quic", or "udp"
+  protocol: "kcp" # Transport protocol: "kcp", "quic", "udp", or "auto"
   kcp:
     mode: "fast"                        # KCP mode: normal, fast, fast2, fast3, manual
     key: "your-secret-key-here"         # CHANGE ME: Secret key (must match server)
@@ -163,10 +164,50 @@ network:
 
 # Transport protocol configuration
 transport:
-  protocol: "kcp" # Transport protocol: "kcp", "quic", or "udp"
+  protocol: "kcp" # Transport protocol: "kcp", "quic", "udp", or "auto"
   kcp:
     mode: "fast"                        # KCP mode: normal, fast, fast2, fast3, manual
     key: "your-secret-key-here"         # CHANGE ME: Secret key (must match client)
+```
+
+#### Example Auto Mode Configuration
+
+When `protocol: "auto"` is set, the server listens on all configured protocols simultaneously and the client probes each to find the lowest-latency option.
+
+**Client (`config.yaml`):**
+
+```yaml
+transport:
+  protocol: "auto"
+  conn: 1
+  kcp:
+    mode: "fast"
+    key: "your-secret-key-here"
+  quic:
+    key: "your-secret-key-here"
+```
+
+**Server (`config.yaml`):**
+
+```yaml
+transport:
+  protocol: "auto"
+  kcp:
+    mode: "fast"
+    key: "your-secret-key-here"
+  quic:
+    key: "your-secret-key-here"
+```
+
+On startup, the client output will show which protocol was selected:
+
+```
+[INF] probing protocol: kcp
+[INF]   kcp: RTT=12.4ms
+[INF] probing protocol: quic
+[INF]   quic: RTT=8.1ms
+[INF] auto-protocol selected: quic
+[INF] Client started: ... (protocol: quic)
 ```
 
 #### Critical Firewall Configuration
@@ -261,13 +302,23 @@ paqet uses a unified YAML configuration that works for both clients and servers.
 
 ### Transport Protocols
 
-paqet supports three transport protocols, selected via `transport.protocol`:
+paqet supports three transport protocols plus an auto-negotiation mode, selected via `transport.protocol`:
 
 | Protocol | Reliability | Encryption | Multiplexing | Best For |
 | :------- | :---------- | :--------- | :----------- | :------- |
 | `kcp`    | Yes (ARQ)   | Symmetric (AES, Salsa20, etc.) | smux | Lossy/unreliable networks, low-latency needs |
 | `quic`   | Yes (QUIC)  | TLS 1.3    | Native QUIC streams | General use, HTTP/3 mimicry |
 | `udp`    | No          | AES-GCM    | smux | Controlled networks, minimal overhead |
+| `auto`   | Varies      | Varies     | Varies | Unknown/changing network conditions |
+
+### Auto Protocol Mode
+
+Setting `protocol: "auto"` enables multi-protocol operation:
+
+- **Server**: Starts all configured protocol listeners on a single port simultaneously. A 1-byte protocol tag (`0x10`=KCP, `0x20`=QUIC, `0x30`=UDP) prepended to each packet allows the server to demux incoming traffic to the correct protocol handler.
+- **Client**: On startup, connects to the server using each configured protocol, sends 3 pings per protocol to measure RTT, and selects the protocol with the lowest average latency. All subsequent connections use the selected protocol.
+- **Requirement**: At least 2 protocol sections (`kcp`, `quic`, `udp`) must be configured. Both client and server must use `auto` mode.
+- **Overhead**: 1 byte per packet for the protocol tag. The demux uses array-indexed O(1) lookup and pooled buffers to avoid per-packet allocation.
 
 ### Encryption Modes (KCP)
 
@@ -353,7 +404,9 @@ Security depends entirely on proper key management. Use the `secret` command to 
     - **Incorrect Network Details:** Double-check all IPs, MAC addresses, and interface names.
     - **Cloud Provider Firewalls:** Ensure your cloud provider's security group allows TCP traffic on your `listen.addr` port.
     - **NAT/Port Configuration:** For servers, ensure `listen.addr` and `network.ipv4.addr` ports match. For clients, use port `0` in `network.ipv4.addr` for automatic port assignment to avoid conflicts.
-3.  **Use `ping` and `dump`:** Use `paqet ping -c config.yaml` to test the connection. Use `paqet dump -p <PORT>` on the server to see if packets are arriving.
+3.  **Auto mode - all probes fail:** Ensure the server is also running in `auto` mode. A non-auto server won't understand the protocol tag byte and will reject all connections. Check that both sides have matching protocol configurations and keys.
+4.  **Auto mode - wrong protocol selected:** The client selects by lowest RTT from 3 pings. If network conditions vary, the selection may differ between restarts. Pin a specific protocol with `protocol: "kcp"` if you need deterministic behavior.
+5.  **Use `ping` and `dump`:** Use `paqet ping -c config.yaml` to test the connection. Use `paqet dump -p <PORT>` on the server to see if packets are arriving.
 
 ## Acknowledgments
 

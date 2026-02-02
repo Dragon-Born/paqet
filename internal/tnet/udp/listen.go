@@ -4,7 +4,6 @@ import (
 	"net"
 	"paqet/internal/conf"
 	"paqet/internal/flog"
-	"paqet/internal/socket"
 	"paqet/internal/tnet"
 
 	"github.com/xtaci/smux"
@@ -12,13 +11,13 @@ import (
 
 // Listener implements tnet.Listener for raw UDP transport.
 type Listener struct {
-	packetConn *socket.PacketConn
+	packetConn net.PacketConn
 	cfg        *conf.UDP
 	demux      *Demux
 }
 
 // Listen creates a UDP listener that demuxes incoming packets by source address.
-func Listen(cfg *conf.UDP, pConn *socket.PacketConn) (tnet.Listener, error) {
+func Listen(cfg *conf.UDP, pConn net.PacketConn) (tnet.Listener, error) {
 	cipher, err := NewCipher(cfg.Block)
 	if err != nil {
 		return nil, err

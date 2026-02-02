@@ -2,20 +2,19 @@ package udp
 
 import (
 	"net"
-	"paqet/internal/socket"
 	"time"
 )
 
 // ConnAdapter wraps a PacketConn + fixed remote address into a net.Conn for smux.
 // It also applies optional per-packet encryption.
 type ConnAdapter struct {
-	pConn  *socket.PacketConn
+	pConn  net.PacketConn
 	remote net.Addr
 	cipher *Cipher
 }
 
 // NewConnAdapter creates a ConnAdapter that sends/receives from a specific remote address.
-func NewConnAdapter(pConn *socket.PacketConn, remote net.Addr, cipher *Cipher) *ConnAdapter {
+func NewConnAdapter(pConn net.PacketConn, remote net.Addr, cipher *Cipher) *ConnAdapter {
 	return &ConnAdapter{pConn: pConn, remote: remote, cipher: cipher}
 }
 

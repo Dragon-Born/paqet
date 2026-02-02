@@ -163,3 +163,120 @@ func TestTransportValidateUDPValid(t *testing.T) {
 		t.Errorf("expected no errors, got %v", errs)
 	}
 }
+
+func TestTransportValidateAutoAccepted(t *testing.T) {
+	tr := Transport{Protocol: "auto", Conn: 1}
+	errs := tr.validate()
+	// Should not have "invalid protocol" error.
+	for _, e := range errs {
+		if e.Error() == "transport protocol must be one of: [kcp quic udp auto]" {
+			t.Error("auto should be accepted as a valid protocol")
+		}
+	}
+}
+
+func TestTransportValidateAutoNeedsTwo(t *testing.T) {
+	// Only one protocol configured — should fail.
+	tr := Transport{
+		Protocol: "auto",
+		Conn:     1,
+		KCP:      &KCP{Mode: "fast", Key: "key", Block_: "aes", MTU: 1350, Rcvwnd: 512, Sndwnd: 512, Smuxbuf: 4096, Streambuf: 4096},
+	}
+	errs := tr.validate()
+	found := false
+	for _, e := range errs {
+		if e.Error() == "auto mode requires at least 2 protocol configurations (kcp, quic, udp)" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected error requiring at least 2 protocols for auto mode")
+	}
+}
+
+func TestTransportValidateAutoWithTwo(t *testing.T) {
+	tr := Transport{
+		Protocol: "auto",
+		Conn:     1,
+		KCP:      &KCP{Mode: "fast", Key: "key", Block_: "aes", MTU: 1350, Rcvwnd: 512, Sndwnd: 512, Smuxbuf: 4096, Streambuf: 4096},
+		QUIC:     &QUIC{Key: "key", ALPN: "h3", MaxStreams: 256, IdleTimeout: 30 * time.Second},
+	}
+	errs := tr.validate()
+	for _, e := range errs {
+		if e.Error() == "auto mode requires at least 2 protocol configurations (kcp, quic, udp)" {
+			t.Error("should not get min-2 error when 2 protocols configured")
+		}
+	}
+}
+
+func TestTransportValidateAutoWithThree(t *testing.T) {
+	tr := Transport{
+		Protocol: "auto",
+		Conn:     1,
+		KCP:      &KCP{Mode: "fast", Key: "key", Block_: "aes", MTU: 1350, Rcvwnd: 512, Sndwnd: 512, Smuxbuf: 4096, Streambuf: 4096},
+		QUIC:     &QUIC{Key: "key", ALPN: "h3", MaxStreams: 256, IdleTimeout: 30 * time.Second},
+		UDP:      &UDP{Key: "key", Block_: "aes", Smuxbuf: 4096, Streambuf: 4096},
+	}
+	errs := tr.validate()
+	for _, e := range errs {
+		if e.Error() == "auto mode requires at least 2 protocol configurations (kcp, quic, udp)" {
+			t.Error("should not get min-2 error when 3 protocols configured")
+		}
+	}
+}
+
+func TestTransportSetDefaultsAuto(t *testing.T) {
+	tr := Transport{
+		Protocol: "auto",
+		KCP:      &KCP{},
+		QUIC:     &QUIC{},
+	}
+	tr.setDefaults("client")
+
+	if tr.Conn != 1 {
+		t.Errorf("expected conn=1, got %d", tr.Conn)
+	}
+	if tr.KCP.Mode != "fast3" {
+		t.Errorf("expected KCP mode=fast3, got %s", tr.KCP.Mode)
+	}
+	if tr.QUIC.ALPN != "h3" {
+		t.Errorf("expected QUIC ALPN=h3, got %s", tr.QUIC.ALPN)
+	}
+}
+
+func TestTransportSetDefaultsAutoNilProtocols(t *testing.T) {
+	// Auto mode should not create nil protocol configs — only set defaults
+	// on ones that exist.
+	tr := Transport{Protocol: "auto"}
+	tr.setDefaults("server")
+
+	if tr.KCP != nil {
+		t.Error("KCP should remain nil when not configured in auto mode")
+	}
+	if tr.QUIC != nil {
+		t.Error("QUIC should remain nil when not configured in auto mode")
+	}
+	if tr.UDP != nil {
+		t.Error("UDP should remain nil when not configured in auto mode")
+	}
+}
+
+func TestTransportValidateAutoValidatesSubProtocols(t *testing.T) {
+	// Auto mode with invalid sub-protocol config should report sub errors.
+	tr := Transport{
+		Protocol: "auto",
+		Conn:     1,
+		KCP:      &KCP{Mode: "invalid_mode", Key: "key", Block_: "aes", MTU: 1350, Rcvwnd: 512, Sndwnd: 512, Smuxbuf: 4096, Streambuf: 4096},
+		QUIC:     &QUIC{Key: "key", ALPN: "h3", MaxStreams: 256, IdleTimeout: 30 * time.Second},
+	}
+	errs := tr.validate()
+	found := false
+	for _, e := range errs {
+		if e.Error() == "KCP mode must be one of: [normal fast fast2 fast3 fast4 manual]" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected KCP mode validation error in auto mode")
+	}
+}

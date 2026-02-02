@@ -3,7 +3,6 @@ package udp
 import (
 	"net"
 	"paqet/internal/pkg/hash"
-	"paqet/internal/socket"
 	"sync"
 	"time"
 )
@@ -55,7 +54,7 @@ func getPacketBuf(n int) (*sync.Pool, []byte) {
 
 // Demux reads from a single PacketConn and routes packets to per-client channels by source address.
 type Demux struct {
-	pConn   *socket.PacketConn
+	pConn   net.PacketConn
 	cipher  *Cipher
 	clients sync.Map // uint64 -> *clientConn
 	newConn chan *clientConn
@@ -63,7 +62,7 @@ type Demux struct {
 }
 
 // NewDemux creates a new packet demultiplexer.
-func NewDemux(pConn *socket.PacketConn, cipher *Cipher) *Demux {
+func NewDemux(pConn net.PacketConn, cipher *Cipher) *Demux {
 	d := &Demux{
 		pConn:   pConn,
 		cipher:  cipher,
@@ -153,13 +152,13 @@ func (d *Demux) Close() {
 // clientConnReader wraps a clientConn into an io.Reader-compatible net.Conn for smux.
 type clientConnReader struct {
 	cc     *clientConn
-	pConn  *socket.PacketConn
+	pConn  net.PacketConn
 	cipher *Cipher
-	buf    []byte   // leftover from previous read
-	curPkt *packet  // current packet for putBack
+	buf    []byte  // leftover from previous read
+	curPkt *packet // current packet for putBack
 }
 
-func newClientConnReader(cc *clientConn, pConn *socket.PacketConn, cipher *Cipher) *clientConnReader {
+func newClientConnReader(cc *clientConn, pConn net.PacketConn, cipher *Cipher) *clientConnReader {
 	return &clientConnReader{cc: cc, pConn: pConn, cipher: cipher}
 }
 

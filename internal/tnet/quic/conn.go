@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"paqet/internal/protocol"
-	"paqet/internal/socket"
 	"paqet/internal/tnet"
 	"time"
 
@@ -14,7 +13,7 @@ import (
 
 // Conn wraps a quic.Conn and implements tnet.Conn.
 type Conn struct {
-	PacketConn *socket.PacketConn
+	PacketConn net.PacketConn
 	QConn      *quic.Conn
 }
 

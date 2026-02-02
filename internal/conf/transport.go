@@ -33,13 +33,24 @@ func (t *Transport) setDefaults(role string) {
 			t.UDP = &UDP{}
 		}
 		t.UDP.setDefaults(role)
+	case "auto":
+		// In auto mode, set defaults for all configured protocols.
+		if t.KCP != nil {
+			t.KCP.setDefaults(role)
+		}
+		if t.QUIC != nil {
+			t.QUIC.setDefaults(role)
+		}
+		if t.UDP != nil {
+			t.UDP.setDefaults(role)
+		}
 	}
 }
 
 func (t *Transport) validate() []error {
 	var errors []error
 
-	validProtocols := []string{"kcp", "quic", "udp"}
+	validProtocols := []string{"kcp", "quic", "udp", "auto"}
 	if !slices.Contains(validProtocols, t.Protocol) {
 		errors = append(errors, fmt.Errorf("transport protocol must be one of: %v", validProtocols))
 	}
@@ -66,6 +77,24 @@ func (t *Transport) validate() []error {
 			errors = append(errors, fmt.Errorf("UDP configuration is required when protocol is 'udp'"))
 		} else {
 			errors = append(errors, t.UDP.validate()...)
+		}
+	case "auto":
+		// At least two protocols must be configured for auto mode.
+		configured := 0
+		if t.KCP != nil {
+			configured++
+			errors = append(errors, t.KCP.validate()...)
+		}
+		if t.QUIC != nil {
+			configured++
+			errors = append(errors, t.QUIC.validate()...)
+		}
+		if t.UDP != nil {
+			configured++
+			errors = append(errors, t.UDP.validate()...)
+		}
+		if configured < 2 {
+			errors = append(errors, fmt.Errorf("auto mode requires at least 2 protocol configurations (kcp, quic, udp)"))
 		}
 	}
 

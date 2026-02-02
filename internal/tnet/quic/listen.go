@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"paqet/internal/conf"
-	"paqet/internal/socket"
 	"paqet/internal/tnet"
 
 	"github.com/quic-go/quic-go"
@@ -12,13 +11,13 @@ import (
 
 // Listener wraps a quic.Listener and implements tnet.Listener.
 type Listener struct {
-	packetConn *socket.PacketConn
+	packetConn net.PacketConn
 	cfg        *conf.QUIC
 	listener   *quic.Listener
 }
 
 // Listen creates a QUIC listener on the given raw PacketConn.
-func Listen(cfg *conf.QUIC, pConn *socket.PacketConn) (tnet.Listener, error) {
+func Listen(cfg *conf.QUIC, pConn net.PacketConn) (tnet.Listener, error) {
 	tlsConf, err := buildTLSConfig(cfg, true)
 	if err != nil {
 		return nil, err

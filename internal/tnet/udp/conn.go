@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"paqet/internal/protocol"
-	"paqet/internal/socket"
 	"paqet/internal/tnet"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 
 // Conn wraps a smux.Session over raw UDP and implements tnet.Conn.
 type Conn struct {
-	PacketConn *socket.PacketConn
+	PacketConn net.PacketConn
 	Session    *smux.Session
 }
 
