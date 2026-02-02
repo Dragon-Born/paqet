@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/badge/go-1.25+-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-`paqet` is a bidirectional Packet-level proxy built using raw sockets in Go. It forwards traffic from a local client to a remote server, which then connects to target services. By operating at the packet level, it completely bypasses the host operating system's TCP/IP stack and uses KCP for secure, reliable transport.
+`paqet` is a bidirectional Packet-level proxy built using raw sockets in Go. It forwards traffic from a local client to a remote server, which then connects to target services. By operating at the packet level, it completely bypasses the host operating system's TCP/IP stack and supports multiple pluggable transport protocols (KCP, QUIC, raw UDP) for secure, reliable transport.
 
 > **⚠️ Development Status Notice**
 >
@@ -20,20 +20,24 @@ This project serves as an example of low-level network programming in Go, demons
 
 `paqet` is designed for specific scenarios where standard VPN or SSH tunnels may be insufficient. Its primary use cases include bypassing firewalls that detect standard handshake protocols by using custom packet structures, network security research for penetration testing and data exfiltration, and evading kernel-level connection tracking for monitoring avoidance.
 
-While `paqet` includes built-in encryption via KCP, it is more complex to configure than general-purpose VPN solutions.
+While `paqet` includes built-in encryption across all transport protocols, it is more complex to configure than general-purpose VPN solutions.
 
 ## How It Works
 
-`paqet` creates a transport channel using KCP over raw TCP packets, bypassing the OS's TCP/IP stack entirely. It captures packets using pcap and injects crafted TCP packets containing encrypted transport data, allowing it to bypass kernel-level connection tracking and evade firewalls.
+`paqet` creates a transport channel over raw TCP packets, bypassing the OS's TCP/IP stack entirely. It captures packets using pcap and injects crafted TCP packets containing encrypted transport data, allowing it to bypass kernel-level connection tracking and evade firewalls. The transport layer is pluggable — choose between KCP, QUIC, or raw UDP depending on your requirements.
 
 ```
 [Your App] <------> [paqet Client] <===== Raw TCP Packet =====> [paqet Server] <------> [Target Server]
 (e.g. curl)        (localhost:1080)        (Internet)          (Public IP:PORT)     (e.g. https://httpbin.org)
 ```
 
-The system operates in three layers: raw TCP packet injection, encrypted transport (KCP), and application-level connection multiplexing.
+The system operates in three layers: raw TCP packet injection, encrypted transport (KCP/QUIC/UDP), and application-level connection multiplexing.
 
-KCP provides reliable, encrypted communication optimized for high-loss or unpredictable networks, using aggressive retransmission, forward error correction, and symmetric encryption with a shared secret key. It is especially well-suited for real-time applications and gaming where low latency are critical.
+**Transport Protocols:**
+
+- **KCP** — Reliable transport optimized for high-loss or unpredictable networks, using aggressive retransmission, forward error correction, and symmetric encryption. Best for real-time applications where low latency is critical. Supports preset modes (normal, fast, fast2, fast3) and a manual mode for fine-grained parameter tuning.
+- **QUIC** — TLS-based transport with native stream multiplexing. Uses a shared secret for deterministic TLS certificate generation, with ALPN set to `h3` by default to mimic HTTP/3 traffic.
+- **Raw UDP** — Minimal overhead transport using smux for stream multiplexing. No reliability layer — packet loss causes stream errors. Best for controlled network environments.
 
 ## Getting Started
 
@@ -63,7 +67,7 @@ You must correctly set the interfaces, IP addresses, MAC addresses, and ports.
 > **⚠️ Important:**
 >
 > - **Role Configuration**: Role must be explicitly set as `role: "client"` or `role: "server"`
-> - **Transport Security**: KCP requires identical keys on client/server.
+> - **Transport Security**: All transport protocols require identical keys on client/server.
 > - **Configuration**: See "Critical Configuration Points" section below for detailed security requirements
 
 #### Finding Your Network Details
@@ -117,6 +121,9 @@ network:
   ipv4:
     addr: "192.168.1.100:0" # CHANGE ME: Local IP (use port 0 for random port)
     router_mac: "aa:bb:cc:dd:ee:ff" # CHANGE ME: Gateway/router MAC address
+  # ipv6:                              # Optional dual-stack IPv6
+  #   addr: "[2001:db8::1]:0"
+  #   router_mac: "aa:bb:cc:dd:ee:ff"
 
 # Server connection settings
 server:
@@ -124,10 +131,10 @@ server:
 
 # Transport protocol configuration
 transport:
-  protocol: "kcp" # Transport protocol (currently only "kcp" supported)
+  protocol: "kcp" # Transport protocol: "kcp", "quic", or "udp"
   kcp:
-    block: "aes" # Encryption algorithm
-    key: "your-secret-key-here" # CHANGE ME: Secret key (must match server)
+    mode: "fast"                        # KCP mode: normal, fast, fast2, fast3, manual
+    key: "your-secret-key-here"         # CHANGE ME: Secret key (must match server)
 ```
 
 #### Example Server Configuration (`config.yaml`)
@@ -150,13 +157,16 @@ network:
   ipv4:
     addr: "10.0.0.100:9999" # CHANGE ME: Server IPv4 and port (port must match listen.addr)
     router_mac: "aa:bb:cc:dd:ee:ff" # CHANGE ME: Gateway/router MAC address
+  # ipv6:                               # Optional dual-stack IPv6
+  #   addr: "[::1]:9999"
+  #   router_mac: "aa:bb:cc:dd:ee:ff"
 
 # Transport protocol configuration
 transport:
-  protocol: "kcp" # Transport protocol (currently only "kcp" supported)
+  protocol: "kcp" # Transport protocol: "kcp", "quic", or "udp"
   kcp:
-    block: "aes" # Encryption algorithm
-    key: "your-secret-key-here" # CHANGE ME: Secret key (must match client)
+    mode: "fast"                        # KCP mode: normal, fast, fast2, fast3, manual
+    key: "your-secret-key-here"         # CHANGE ME: Secret key (must match client)
 ```
 
 #### Critical Firewall Configuration
@@ -235,8 +245,9 @@ sudo ./paqet <command> [arguments]
 | :-------- | :------------------------------------------------------------------------------- |
 | `run`     | Starts the `paqet` client or server proxy. This is the main operational command. |
 | `secret`  | Generates a new, cryptographically secure secret key.                            |
-| `ping`    | Sends a single test packet to the server to verify connectivity .                |
+| `ping`    | Sends a single test packet to the server to verify connectivity.                 |
 | `dump`    | A diagnostic tool similar to `tcpdump` that captures and decodes packets.        |
+| `iface`   | Network interface utilities (list interfaces, show details).                     |
 | `version` | Prints the application's version information.                                    |
 
 ## Configuration Reference
@@ -248,9 +259,19 @@ paqet uses a unified YAML configuration that works for both clients and servers.
 - [`example/client.yaml.example`](example/client.yaml.example) - Client configuration reference
 - [`example/server.yaml.example`](example/server.yaml.example) - Server configuration reference
 
-### Encryption Modes
+### Transport Protocols
 
-The `transport.kcp.block` parameter determines the encryption method. There are two special modes to disable encryption:
+paqet supports three transport protocols, selected via `transport.protocol`:
+
+| Protocol | Reliability | Encryption | Multiplexing | Best For |
+| :------- | :---------- | :--------- | :----------- | :------- |
+| `kcp`    | Yes (ARQ)   | Symmetric (AES, Salsa20, etc.) | smux | Lossy/unreliable networks, low-latency needs |
+| `quic`   | Yes (QUIC)  | TLS 1.3    | Native QUIC streams | General use, HTTP/3 mimicry |
+| `udp`    | No          | AES-GCM    | smux | Controlled networks, minimal overhead |
+
+### Encryption Modes (KCP)
+
+The `transport.kcp.block` parameter determines the KCP encryption method. There are two special modes to disable encryption:
 
 **`none`** (Plaintext with Header)
 No encryption is applied, but a protocol header is still present. The packet format remains compatible with encrypted modes, but the content is plaintext. This helps with protocol compatibility.
@@ -258,11 +279,17 @@ No encryption is applied, but a protocol header is still present. The packet for
 **`null`** (Raw Data)
 No encryption and no protocol header, data is transmitted in raw form without any cryptographic framing. This offers the highest performance but is the least secure and most easily identified.
 
+### KCP Manual Mode
+
+When `transport.kcp.mode` is set to `"manual"`, you can fine-tune individual KCP parameters: `nodelay`, `interval`, `resend`, `nocongestion`, `wdelay`, and `acknodelay`. See the example configuration files for detailed documentation of each parameter.
+
 ### Critical Configuration Points
 
-**Transport Security:** KCP requires identical keys on client/server (use `secret` command to generate).
+**Transport Security:** All transport protocols require identical keys on client/server (use `secret` command to generate).
 
 **Network Configuration:** Use your actual IP address in `network.ipv4.addr`, not `127.0.0.1`. For servers, `network.ipv4.addr` and `listen.addr` ports must match. For clients, use port `0` in `network.ipv4.addr` to automatically assign a random available port and avoid conflicts.
+
+**IPv6 Dual-Stack:** Both IPv4 and IPv6 can be configured simultaneously. When both are set, their ports must match.
 
 **TCP Flag Cycling:** The `network.tcp.local_flag` and `network.tcp.remote_flag` arrays cycle through flag combinations to vary traffic patterns. Common patterns: `["PA"]` (standard data), `["S"]` (connection setup), `["A"]` (acknowledgment).
 
@@ -312,7 +339,7 @@ This means a rule like `ufw deny <PORT>` will have no effect on the proxy's oper
 
 ## ⚠️ Security Warning
 
-This project is an exploration of low-level networking and carries significant security responsibilities. The KCP transport protocol provides encryption, authentication, and integrity using symmetric encryption with a shared secret key.
+This project is an exploration of low-level networking and carries significant security responsibilities. All transport protocols provide encryption — KCP uses symmetric ciphers, QUIC uses TLS 1.3, and raw UDP uses AES-GCM.
 
 Security depends entirely on proper key management. Use the `secret` command to generate a strong key that must remain identical on both client and server.
 
@@ -321,7 +348,7 @@ Security depends entirely on proper key management. Use the `secret` command to 
 1.  **Permission Denied:** Ensure you are running with `sudo`.
 2.  **Connection Times Out:**
     - **Transport Configuration Mismatch:**
-      - **KCP**: Ensure `transport.kcp.key` is exactly identical on client and server
+      - Ensure encryption keys are exactly identical on client and server for your chosen transport protocol
     - **`iptables` Rules:** Did you apply the firewall rules on the server?
     - **Incorrect Network Details:** Double-check all IPs, MAC addresses, and interface names.
     - **Cloud Provider Firewalls:** Ensure your cloud provider's security group allows TCP traffic on your `listen.addr` port.
@@ -335,6 +362,7 @@ This work draws inspiration from the research and implementation in the [gfw_res
 - Uses [pcap](https://github.com/the-tcpdump-group/libpcap) for low-level packet capture and injection
 - Uses [gopacket](https://github.com/gopacket/gopacket) for raw packet crafting and decoding
 - Uses [kcp-go](https://github.com/xtaci/kcp-go) for reliable transport with encryption
+- Uses [quic-go](https://github.com/quic-go/quic-go) for QUIC transport with TLS 1.3
 - Uses [smux](https://github.com/xtaci/smux) for connection multiplexing
 
 ## License
