@@ -20,7 +20,7 @@ import (
 
 const (
 	nicID             = 1
-	channelEndpointSz = 1024
+	channelEndpointSz = 8192 // Increased from 1024 for high-bandwidth transfers
 )
 
 type netStack struct {
@@ -34,6 +34,23 @@ func newNetStack(dev wgtun.Device, prefix netip.Prefix, mtu int) (*netStack, err
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 	})
+
+	// Tune TCP for high-bandwidth transfers.
+	// Increase send buffer: min 4KB, default 4MB, max 16MB.
+	tcpSendBufOpt := tcpip.TCPSendBufferSizeRangeOption{Min: 4 << 10, Default: 4 << 20, Max: 16 << 20}
+	if err := s.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpSendBufOpt); err != nil {
+		flog.Warnf("failed to set TCP send buffer size: %v", err)
+	}
+	// Increase receive buffer: min 4KB, default 4MB, max 16MB.
+	tcpRecvBufOpt := tcpip.TCPReceiveBufferSizeRangeOption{Min: 4 << 10, Default: 4 << 20, Max: 16 << 20}
+	if err := s.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpRecvBufOpt); err != nil {
+		flog.Warnf("failed to set TCP receive buffer size: %v", err)
+	}
+	// Enable SACK for better loss recovery.
+	sackOpt := tcpip.TCPSACKEnabled(true)
+	if err := s.SetTransportProtocolOption(tcp.ProtocolNumber, &sackOpt); err != nil {
+		flog.Warnf("failed to enable TCP SACK: %v", err)
+	}
 
 	ep := channel.New(channelEndpointSz, uint32(mtu), "")
 

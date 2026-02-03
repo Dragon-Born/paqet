@@ -14,7 +14,8 @@ import (
 )
 
 func (t *TUN) setupTCPForwarder() {
-	fwd := tcp.NewForwarder(t.ns.s, 0, 65535, func(r *tcp.ForwarderRequest) {
+	// rcvWnd=4MB to match our tuned buffer sizes, maxInFlight=65535 pending connections.
+	fwd := tcp.NewForwarder(t.ns.s, 4<<20, 65535, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
 		dstIP := addrToNetIP(id.LocalAddress)
 		if !t.filter.shouldForward(dstIP) {
