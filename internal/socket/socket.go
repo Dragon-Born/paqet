@@ -16,6 +16,7 @@ type PacketConn struct {
 	cfg           *conf.Network
 	sendHandle    *SendHandle
 	recvHandle    *RecvHandle
+	localAddr     *net.UDPAddr
 	readDeadline  atomic.Int64 // UnixNano, 0 means no deadline
 	writeDeadline atomic.Int64
 
@@ -39,11 +40,20 @@ func New(ctx context.Context, cfg *conf.Network) (*PacketConn, error) {
 		return nil, fmt.Errorf("failed to create receive handle on %s: %v", cfg.Interface.Name, err)
 	}
 
+	// Determine local address for LocalAddr() — required by quic-go.
+	var localAddr *net.UDPAddr
+	if cfg.IPv4.Addr != nil {
+		localAddr = cfg.IPv4.Addr
+	} else if cfg.IPv6.Addr != nil {
+		localAddr = cfg.IPv6.Addr
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	conn := &PacketConn{
 		cfg:        cfg,
 		sendHandle: sendHandle,
 		recvHandle: recvHandle,
+		localAddr:  localAddr,
 		ctx:        ctx,
 		cancel:     cancel,
 	}
@@ -126,7 +136,7 @@ func (c *PacketConn) Close() error {
 }
 
 func (c *PacketConn) LocalAddr() net.Addr {
-	return nil
+	return c.localAddr
 }
 
 func (c *PacketConn) SetDeadline(t time.Time) error {
