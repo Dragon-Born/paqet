@@ -9,6 +9,7 @@ import (
 	"paqet/internal/flog"
 	"paqet/internal/forward"
 	"paqet/internal/socks"
+	"paqet/internal/tun"
 	"syscall"
 )
 
@@ -51,5 +52,21 @@ func startClient(cfg *conf.Conf) {
 		}
 	}
 
+	var tunDev *tun.TUN
+	if cfg.TUN != nil {
+		tunDev, err = tun.New(client, cfg.TUN, cfg.Server.Addr.IP.String())
+		if err != nil {
+			flog.Fatalf("Failed to initialize TUN: %v", err)
+		}
+		if err := tunDev.Start(ctx); err != nil {
+			flog.Fatalf("TUN encountered an error: %v", err)
+		}
+	}
+
 	<-ctx.Done()
+
+	// Restore routes before the process exits.
+	if tunDev != nil {
+		tunDev.Close()
+	}
 }

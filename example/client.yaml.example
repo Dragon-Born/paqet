@@ -18,6 +18,15 @@ socks5:
 #     target: "127.0.0.1:80"    # Target to forward to (via server)
 #     protocol: "tcp"           # Protocol (tcp/udp)
 
+# TUN mode (full system VPN - routes all traffic through tunnel)
+# Requires root/administrator privileges
+# tun:
+#   name: "paqet0"           # TUN device name (default: "utun" on macOS, "paqet0" on Linux/Windows)
+#   addr: "10.0.85.1/24"     # TUN interface address (CIDR)
+#   mtu: 1400                # MTU (default: 1400)
+#   dns: "8.8.8.8"           # DNS server
+#   auto_route: true         # Auto-configure system routes
+
 # Network interface settings
 network:
   interface: "en0"                          # CHANGE ME: Network interface (en0, eth0, wlan0, etc.)
