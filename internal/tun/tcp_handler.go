@@ -16,7 +16,12 @@ import (
 func (t *TUN) setupTCPForwarder() {
 	fwd := tcp.NewForwarder(t.ns.s, 0, 65535, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
-		targetAddr := fmt.Sprintf("%s:%d", formatAddr(id.LocalAddress), id.LocalPort)
+		dstIP := addrToNetIP(id.LocalAddress)
+		if !t.filter.shouldForward(dstIP) {
+			r.Complete(true) // RST — don't tunnel this traffic
+			return
+		}
+		targetAddr := fmt.Sprintf("%s:%d", dstIP, id.LocalPort)
 
 		var wq waiter.Queue
 		ep, err := r.CreateEndpoint(&wq)
@@ -61,11 +66,15 @@ func (t *TUN) handleTCP(ctx context.Context, conn net.Conn, targetAddr string) {
 	}
 }
 
-func formatAddr(addr tcpip.Address) string {
+func addrToNetIP(addr tcpip.Address) net.IP {
 	if addr.Len() == 4 {
 		a := addr.As4()
-		return net.IP(a[:]).String()
+		return net.IP(a[:])
 	}
 	a := addr.As16()
-	return net.IP(a[:]).String()
+	return net.IP(a[:])
+}
+
+func formatAddr(addr tcpip.Address) string {
+	return addrToNetIP(addr).String()
 }

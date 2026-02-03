@@ -108,6 +108,11 @@ func (ns *netStack) tunToStack(ctx context.Context) {
 
 // stackToTun reads packets from the gVisor endpoint and writes them to the TUN device.
 func (ns *netStack) stackToTun(ctx context.Context) {
+	// Pre-allocate a reusable write buffer to avoid per-packet allocation.
+	// 65536 + tunOffset covers the maximum IP packet size.
+	buf := make([]byte, tunOffset+65536)
+	bufs := [][]byte{buf}
+
 	for {
 		pkt := ns.ep.ReadContext(ctx)
 		if pkt == nil {
@@ -116,12 +121,10 @@ func (ns *netStack) stackToTun(ctx context.Context) {
 
 		view := pkt.ToView()
 		data := view.AsSlice()
+		n := len(data)
 
-		// On macOS, wireguard/tun expects tunOffset bytes of headroom before the
-		// IP packet for the AF_INET/AF_INET6 protocol header it writes on Write.
-		buf := make([]byte, tunOffset+len(data))
 		copy(buf[tunOffset:], data)
-		bufs := [][]byte{buf}
+		bufs[0] = buf[:tunOffset+n]
 		if _, err := ns.dev.Write(bufs, tunOffset); err != nil {
 			if ctx.Err() != nil {
 				pkt.DecRef()

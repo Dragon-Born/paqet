@@ -15,8 +15,12 @@ import (
 func (t *TUN) setupUDPForwarder() {
 	fwd := udp.NewForwarder(t.ns.s, func(r *udp.ForwarderRequest) bool {
 		id := r.ID()
+		dstIP := addrToNetIP(id.LocalAddress)
+		if !t.filter.shouldForward(dstIP) {
+			return true // drop — don't tunnel this traffic
+		}
 		localAddr := fmt.Sprintf("%s:%d", formatAddr(id.RemoteAddress), id.RemotePort)
-		targetAddr := fmt.Sprintf("%s:%d", formatAddr(id.LocalAddress), id.LocalPort)
+		targetAddr := fmt.Sprintf("%s:%d", dstIP, id.LocalPort)
 
 		var wq waiter.Queue
 		ep, err := r.CreateEndpoint(&wq)

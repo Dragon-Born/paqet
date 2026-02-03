@@ -20,6 +20,7 @@ type TUN struct {
 	devName  string
 	ns       *netStack
 	router   routeManager
+	filter   *filter
 	ctx      context.Context
 	cancel   context.CancelFunc
 	once     sync.Once
@@ -32,6 +33,7 @@ func New(c *client.Client, cfg *conf.TUN, serverIP string) (*TUN, error) {
 		cfg:      cfg,
 		serverIP: serverIP,
 		router:   newRouteManager(),
+		filter:   newFilter(serverIP),
 		done:     make(chan struct{}),
 	}, nil
 }
