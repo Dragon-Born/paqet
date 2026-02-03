@@ -1,0 +1,60 @@
+# paqet Server Configuration — Maximum Bandwidth & Speed
+#
+# Matching server config for client-max-bandwidth.yaml.example.
+# transport.protocol must match the client. Configure both kcp and quic
+# sections so you can switch between them, or use "auto" to accept both.
+# Server windows should be >= client windows.
+
+role: "server"
+
+log:
+  level: "info"
+
+listen:
+  addr: ":9999"
+
+network:
+  interface: "eth0"                          # CHANGE ME
+  ipv4:
+    addr: "10.0.0.100:9999"                 # CHANGE ME
+    router_mac: "aa:bb:cc:dd:ee:ff"         # CHANGE ME
+  tcp:
+    local_flag: ["PA"]
+  pcap:
+    sockbuf: 33554432                        # 32MB pcap buffer (vs 8MB default)
+
+transport:
+  protocol: "kcp"                            # "kcp", "quic", or "auto" — must match client
+  conn: 4
+
+  # ── KCP ──
+  kcp:
+    mode: "manual"
+    nodelay: 1
+    interval: 5
+    resend: 2
+    nocongestion: 1
+    wdelay: false
+    acknodelay: true
+
+    mtu: 1400
+    rcvwnd: 4096                             # Server windows >= client (double for headroom)
+    sndwnd: 4096
+
+    block: "aes"
+    key: "your-secret-key-here"              # CHANGE ME (must match client)
+
+    smuxbuf: 16777216
+    streambuf: 8388608
+
+  # ── QUIC ──
+  quic:
+    key: "your-secret-key-here"              # CHANGE ME (must match client)
+    alpn: "h3"
+    max_streams: 1024
+    idle_timeout: 60s
+
+# Required iptables rules:
+# sudo iptables -t raw -A PREROUTING -p tcp --dport 9999 -j NOTRACK
+# sudo iptables -t raw -A OUTPUT -p tcp --sport 9999 -j NOTRACK
+# sudo iptables -t mangle -A OUTPUT -p tcp --sport 9999 --tcp-flags RST RST -j DROP

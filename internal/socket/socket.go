@@ -156,6 +156,8 @@ func (c *PacketConn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
+func (c *PacketConn) SetReadBuffer(bytes int) error { return nil }
+
 func (c *PacketConn) SetDSCP(dscp int) error {
 	return nil
 }

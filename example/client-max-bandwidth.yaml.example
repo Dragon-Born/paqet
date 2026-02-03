@@ -1,0 +1,74 @@
+# paqet Client Configuration — Maximum Bandwidth & Speed
+#
+# Two protocol options below: KCP and QUIC. Pick one via transport.protocol.
+#
+# KCP: Maximum control. You can disable congestion control entirely,
+#      tune retransmit intervals down to 5ms, and control every knob.
+#      Best when you own the link and don't care about fairness.
+#
+# QUIC: Lower overhead. Native stream mux (no smux layer), 0-RTT resumption,
+#       per-packet loss recovery. Congestion control can't be disabled but
+#       QUIC often wins on real-world throughput due to less protocol overhead.
+#
+# Trade-offs:
+#   - Higher CPU and memory usage than defaults
+#   - KCP with nocongestion=1 is not fair to competing TCP flows
+#   - More parallel connections = more raw socket overhead
+#
+# KCP window sizing formula:
+#   window = (bandwidth_bytes_per_sec * RTT_sec) / MTU
+#   Example: 100 Mbps link, 100ms RTT → (12.5MB/s * 0.1) / 1350 ≈ 926
+#   Use the next power of 2: 1024. Double for headroom: 2048.
+
+role: "client"
+
+log:
+  level: "info"
+
+socks5:
+  - listen: "0.0.0.0:1080"
+
+network:
+  interface: "en0"                          # CHANGE ME
+  ipv4:
+    addr: "192.168.1.100:0"                 # CHANGE ME
+    router_mac: "aa:bb:cc:dd:ee:ff"         # CHANGE ME
+  tcp:
+    local_flag: ["PA"]
+    remote_flag: ["PA"]
+  pcap:
+    sockbuf: 16777216                        # 16MB pcap buffer (vs 4MB default)
+
+server:
+  addr: "10.0.0.100:9999"                   # CHANGE ME
+
+transport:
+  protocol: "kcp"                            # "kcp" or "quic" — pick one
+  conn: 4                                    # 4 parallel connections for throughput
+
+  # ── KCP: maximum throughput via manual tuning ──
+  kcp:
+    mode: "manual"
+    nodelay: 1                               # Enable low-latency mode
+    interval: 5                              # 5ms update interval (fastest)
+    resend: 2                                # Aggressive fast retransmit
+    nocongestion: 1                          # No congestion control — full send rate
+    wdelay: false                            # Flush immediately, don't batch
+    acknodelay: true                         # ACK every packet instantly
+
+    mtu: 1400                                # Larger MTU = fewer packets per byte
+    rcvwnd: 2048                             # Large receive window
+    sndwnd: 2048                             # Large send window
+
+    block: "aes"
+    key: "your-secret-key-here"              # CHANGE ME
+
+    smuxbuf: 16777216                        # 16MB smux buffer (vs 4MB default)
+    streambuf: 8388608                       # 8MB stream buffer (vs 2MB default)
+
+  # ── QUIC: maximum throughput via high concurrency ──
+  quic:
+    key: "your-secret-key-here"              # CHANGE ME
+    alpn: "h3"
+    max_streams: 1024                        # 1024 concurrent streams (vs 256 default)
+    idle_timeout: 60s                        # Longer idle timeout to avoid reconnect churn
