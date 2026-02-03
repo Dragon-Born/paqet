@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/badge/go-1.25+-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-`paqet` is a bidirectional Packet-level proxy built using raw sockets in Go. It forwards traffic from a local client to a remote server, which then connects to target services. By operating at the packet level, it completely bypasses the host operating system's TCP/IP stack and supports multiple pluggable transport protocols (KCP, QUIC, raw UDP) for secure, reliable transport. In **auto** mode, the server accepts all protocols simultaneously on a single port while the client probes each and selects the fastest.
+`paqet` is a bidirectional Packet-level proxy built using raw sockets in Go. It forwards traffic from a local client to a remote server, which then connects to target services. By operating at the packet level, it completely bypasses the host operating system's TCP/IP stack and supports multiple pluggable transport protocols (KCP, QUIC, raw UDP) for secure, reliable transport. In **auto** mode, the server accepts all protocols simultaneously on a single port while the client probes each and selects the fastest. In **TUN** mode, a virtual network interface captures all system traffic and routes it through the tunnel — acting as a full system VPN with no per-app proxy configuration required.
 
 > **⚠️ Development Status Notice**
 >
@@ -29,6 +29,12 @@ While `paqet` includes built-in encryption across all transport protocols, it is
 ```
 [Your App] <------> [paqet Client] <===== Raw TCP Packet =====> [paqet Server] <------> [Target Server]
 (e.g. curl)        (localhost:1080)        (Internet)          (Public IP:PORT)     (e.g. https://httpbin.org)
+```
+
+In TUN mode, the client creates a virtual network interface that captures all system IP traffic:
+
+```
+[All System Traffic] --> [TUN Device] --> [gVisor TCP/IP Stack] --> [paqet Client] <====> [paqet Server] --> [Target]
 ```
 
 The system operates in three layers: raw TCP packet injection, encrypted transport (KCP/QUIC/UDP), and application-level connection multiplexing.
@@ -97,11 +103,15 @@ You'll need to find your network interface name, local IP, and the MAC address o
 2. **Find Interface device GUID:** Windows requires the Npcap device GUID. In PowerShell, run: `Get-NetAdapter | Select-Object Name, InterfaceGuid`: Note the **InterfaceGuid** of your active network interface. (Format it as: `\Device\NPF_{GUID}`)
 3. **Find Gateway MAC Address:** Run: `arp -a <gateway_ip>`. Note the MAC address for the gateway.
 
-#### Client Configuration - SOCKS5 Proxy Mode
+#### Client Modes
 
-The client acts as a SOCKS5 proxy server, accepting connections from applications and dynamically forwarding them through the raw TCP packets to any destination.
+paqet supports three client modes that can be used independently or combined:
 
-#### Example Client Configuration (`config.yaml`)
+- **SOCKS5 Proxy** — Applications connect through a local SOCKS5 proxy (per-app configuration required)
+- **Port Forwarding** — Forwards specific local ports to remote targets
+- **TUN (System VPN)** — Creates a virtual network interface that captures all system traffic (no per-app configuration)
+
+#### Example Client Configuration - SOCKS5 (`config.yaml`)
 
 ```yaml
 # Role must be explicitly set
@@ -137,6 +147,41 @@ transport:
     mode: "fast"                        # KCP mode: normal, fast, fast2, fast3, manual
     key: "your-secret-key-here"         # CHANGE ME: Secret key (must match server)
 ```
+
+#### Example Client Configuration - TUN Mode (`config.yaml`)
+
+TUN mode routes all system traffic through the tunnel. No per-app proxy configuration is needed.
+
+```yaml
+role: "client"
+
+log:
+  level: "info"
+
+# TUN creates a virtual network interface and routes all traffic through the tunnel
+tun:
+  addr: "10.0.85.1/24"     # TUN interface address (CIDR)
+  mtu: 1400                # MTU (default: 1400, leaves room for encapsulation)
+  dns: "8.8.8.8"           # DNS server
+  auto_route: true         # Auto-configure system routes (default: true)
+
+network:
+  interface: "en0"
+  ipv4:
+    addr: "192.168.1.100:0"
+    router_mac: "aa:bb:cc:dd:ee:ff"
+
+server:
+  addr: "10.0.0.100:9999"
+
+transport:
+  protocol: "kcp"
+  kcp:
+    mode: "fast"
+    key: "your-secret-key-here"
+```
+
+> **Note:** TUN mode requires root/administrator privileges. On macOS, the device name is automatically assigned (`utunN`). The server requires **no changes** — the same server configuration works with SOCKS5, port forwarding, and TUN clients.
 
 #### Example Server Configuration (`config.yaml`)
 
@@ -263,14 +308,22 @@ sudo ./paqet_darwin_arm64 run -c config.yaml
 
 ### 4. Test the Connection
 
-Once the client and server are running, test the SOCKS5 proxy:
+Once the client and server are running, test the connection:
+
+**SOCKS5 mode:**
 
 ```bash
-# Test with curl using the SOCKS5 proxy
 curl -v https://httpbin.org/ip --proxy socks5h://127.0.0.1:1080
 ```
 
-This request will be proxied over raw TCP packets to the server, and then forwarded according to the client mode configuration. The output should show your server's public IP address, confirming the connection is working.
+**TUN mode:**
+
+```bash
+# All traffic is automatically routed — no proxy needed
+curl -v https://httpbin.org/ip
+```
+
+The output should show your server's public IP address, confirming the connection is working.
 
 ## Command-Line Usage
 
@@ -417,6 +470,8 @@ This work draws inspiration from the research and implementation in the [gfw_res
 - Uses [kcp-go](https://github.com/xtaci/kcp-go) for reliable transport with encryption
 - Uses [quic-go](https://github.com/quic-go/quic-go) for QUIC transport with TLS 1.3
 - Uses [smux](https://github.com/xtaci/smux) for connection multiplexing
+- Uses [wireguard/tun](https://git.zx2c4.com/wireguard-go) for cross-platform TUN device creation
+- Uses [gVisor netstack](https://github.com/google/gvisor) for userspace TCP/IP stack in TUN mode
 
 ## License
 
