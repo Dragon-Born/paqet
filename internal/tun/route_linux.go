@@ -30,10 +30,12 @@ func newRouteManager() routeManager {
 	return &linuxRouteManager{}
 }
 
-func (r *linuxRouteManager) addRoutes(tunName, tunAddr, serverIP string) error {
+func (r *linuxRouteManager) addRoutes(tunName, tunAddr, serverIP, dnsIP string) error {
 	r.serverIP = serverIP
 	r.tunName = tunName
 	r.tunAddr = tunAddr
+	// TODO: Implement DNS configuration for Linux (modify /etc/resolv.conf or use resolvconf)
+	_ = dnsIP
 
 	// Get the current default gateway.
 	gw, iface, err := r.getDefaultGateway()

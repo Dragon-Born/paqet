@@ -8,6 +8,7 @@ import (
 // NetworkInfo holds auto-detected network configuration.
 type NetworkInfo struct {
 	Interface  string
+	GUID       string // Windows NPF device GUID
 	IPv4Addr   string
 	GatewayIP  string
 	GatewayMAC string

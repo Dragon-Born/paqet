@@ -33,7 +33,7 @@ func New(c *client.Client, cfg *conf.TUN, serverIP string) (*TUN, error) {
 		cfg:      cfg,
 		serverIP: serverIP,
 		router:   newRouteManager(),
-		filter:   newFilter(serverIP),
+		filter:   newFilter(serverIP, cfg.DNS),
 		done:     make(chan struct{}),
 	}, nil
 }
@@ -73,9 +73,9 @@ func (t *TUN) Start(ctx context.Context) error {
 	go ns.tunToStack(t.ctx)
 	go ns.stackToTun(t.ctx)
 
-	// Configure system routes.
+	// Configure system routes and DNS.
 	if *t.cfg.AutoRoute {
-		if err := t.router.addRoutes(t.devName, t.cfg.Addr, t.serverIP); err != nil {
+		if err := t.router.addRoutes(t.devName, t.cfg.Addr, t.serverIP, t.cfg.DNS); err != nil {
 			t.Close()
 			return fmt.Errorf("failed to configure routes: %w", err)
 		}

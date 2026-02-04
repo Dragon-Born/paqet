@@ -17,6 +17,7 @@ const (
 	PTCPF PType = 0x03
 	PTCP  PType = 0x04
 	PUDP  PType = 0x05
+	PICMP PType = 0x06
 )
 
 var (
@@ -28,6 +29,13 @@ type Proto struct {
 	Type PType
 	Addr *tnet.Addr
 	TCPF []conf.TCPF
+	ICMP *ICMPData // For ICMP packets
+}
+
+// ICMPData holds ICMP packet info for tunneling.
+type ICMPData struct {
+	DstIP   net.IP // Destination IP
+	Payload []byte // Full ICMP payload (type, code, checksum, data)
 }
 
 func (p *Proto) Read(r io.Reader) error {
@@ -44,6 +52,8 @@ func (p *Proto) Read(r io.Reader) error {
 		return p.readAddr(r)
 	case PTCPF:
 		return p.readTCPF(r)
+	case PICMP:
+		return p.readICMP(r)
 	default:
 		return ErrUnknownProtoType
 	}
@@ -61,6 +71,8 @@ func (p *Proto) Write(w io.Writer) error {
 		return p.writeAddr(w)
 	case PTCPF:
 		return p.writeTCPF(w)
+	case PICMP:
+		return p.writeICMP(w)
 	default:
 		return ErrUnknownProtoType
 	}
@@ -144,6 +156,73 @@ func unpackTCPF(b [2]byte) conf.TCPF {
 		CWR: b[0]&(1<<7) != 0,
 		NS:  b[1]&(1<<0) != 0,
 	}
+}
+
+// readICMP reads ICMP data.
+// Wire format: isIPv6(1) + dstIP(4 or 16) + payloadLen(2) + payload(payloadLen)
+func (p *Proto) readICMP(r io.Reader) error {
+	var isIPv6 [1]byte
+	if _, err := io.ReadFull(r, isIPv6[:]); err != nil {
+		return err
+	}
+
+	var dstIP net.IP
+	if isIPv6[0] == 1 {
+		dstIP = make([]byte, 16)
+	} else {
+		dstIP = make([]byte, 4)
+	}
+	if _, err := io.ReadFull(r, dstIP); err != nil {
+		return err
+	}
+
+	var lenBuf [2]byte
+	if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+		return err
+	}
+	payloadLen := binary.BigEndian.Uint16(lenBuf[:])
+
+	payload := make([]byte, payloadLen)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return err
+	}
+
+	p.ICMP = &ICMPData{DstIP: dstIP, Payload: payload}
+	return nil
+}
+
+// writeICMP writes ICMP data.
+func (p *Proto) writeICMP(w io.Writer) error {
+	if p.ICMP == nil {
+		return errors.New("ICMP data is nil")
+	}
+
+	// Write IPv6 flag
+	isIPv6 := byte(0)
+	ip := p.ICMP.DstIP
+	if ip.To4() == nil {
+		isIPv6 = 1
+		ip = ip.To16()
+	} else {
+		ip = ip.To4()
+	}
+	if _, err := w.Write([]byte{isIPv6}); err != nil {
+		return err
+	}
+
+	// Write destination IP
+	if _, err := w.Write(ip); err != nil {
+		return err
+	}
+
+	// Write payload length and payload
+	lenBuf := [2]byte{}
+	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(p.ICMP.Payload)))
+	if _, err := w.Write(lenBuf[:]); err != nil {
+		return err
+	}
+	_, err := w.Write(p.ICMP.Payload)
+	return err
 }
 
 // Address type constants for binary encoding

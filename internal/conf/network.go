@@ -37,15 +37,28 @@ func (n *Network) setDefaults(role string) {
 		}
 	}
 
+	// On Windows, detect GUID for manually configured interface if needed.
+	if runtime.GOOS == "windows" && n.GUID == "" && n.Interface_ != "" {
+		if guid, err := detectGUIDForInterface(n.Interface_); err == nil {
+			n.GUID = guid
+			flog.Infof("auto-detected interface GUID: %s", guid)
+		} else {
+			flog.Warnf("failed to detect GUID for interface %s: %v", n.Interface_, err)
+		}
+	}
+
 	n.PCAP.setDefaults(role)
 	n.TCP.setDefaults()
 }
 
 // needsAutoDetect returns true if any network settings need auto-detection.
 func (n *Network) needsAutoDetect() bool {
-	return n.Interface_ == "" ||
-		(n.IPv4.Addr_ == "" && n.IPv6.Addr_ == "") ||
-		(n.IPv4.RouterMac_ == "" && n.IPv6.RouterMac_ == "")
+	needsInterface := n.Interface_ == ""
+	needsIP := n.IPv4.Addr_ == "" && n.IPv6.Addr_ == ""
+	needsMAC := n.IPv4.RouterMac_ == "" && n.IPv6.RouterMac_ == ""
+	needsGUID := runtime.GOOS == "windows" && n.GUID == ""
+
+	return needsInterface || needsIP || needsMAC || needsGUID
 }
 
 // applyAutoDetected fills in missing network configuration from auto-detected values.
@@ -53,6 +66,11 @@ func (n *Network) applyAutoDetected(info *NetworkInfo) {
 	if n.Interface_ == "" && info.Interface != "" {
 		n.Interface_ = info.Interface
 		flog.Infof("auto-detected interface: %s", info.Interface)
+	}
+
+	if n.GUID == "" && info.GUID != "" {
+		n.GUID = info.GUID
+		flog.Infof("auto-detected interface GUID: %s", info.GUID)
 	}
 
 	if n.IPv4.Addr_ == "" && info.IPv4Addr != "" {

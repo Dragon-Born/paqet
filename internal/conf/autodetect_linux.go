@@ -107,3 +107,8 @@ func lookupNeighbor(ip string) (string, error) {
 
 	return "", nil
 }
+
+// detectGUIDForInterface is a no-op on Linux (GUID only needed on Windows).
+func detectGUIDForInterface(_ string) (string, error) {
+	return "", fmt.Errorf("GUID detection not applicable on Linux")
+}

@@ -8,13 +8,21 @@ import (
 // filter decides which destination IPs should be forwarded through the tunnel.
 // Traffic to the paqet server, loopback, link-local, multicast, and private
 // networks is dropped — exactly what other TUN-based VPNs (sing-box, tun2socks) do.
+// Exception: DNS traffic (port 53) to private IPs is allowed and redirected.
 type filter struct {
 	serverIP netip.Addr
+	dnsIP    netip.Addr
 }
 
-func newFilter(serverIP string) *filter {
-	addr, _ := netip.ParseAddr(serverIP)
-	return &filter{serverIP: addr}
+func newFilter(serverIP, dnsIP string) *filter {
+	sAddr, _ := netip.ParseAddr(serverIP)
+	dAddr, _ := netip.ParseAddr(dnsIP)
+	return &filter{serverIP: sAddr, dnsIP: dAddr}
+}
+
+// DNSServer returns the configured DNS server IP.
+func (f *filter) DNSServer() string {
+	return f.dnsIP.String()
 }
 
 // shouldForward returns true if traffic to this IP should go through the tunnel.
@@ -45,7 +53,7 @@ func (f *filter) shouldForward(ip net.IP) bool {
 		return false
 	}
 
-	// Drop private/reserved networks.
+	// Drop private/reserved networks (but DNS is handled separately).
 	if addr.IsPrivate() {
 		return false
 	}
@@ -56,4 +64,38 @@ func (f *filter) shouldForward(ip net.IP) bool {
 	}
 
 	return true
+}
+
+// shouldForwardDNS returns true if DNS traffic (port 53) should be forwarded.
+// DNS to any destination (including private IPs) is allowed and will be
+// redirected to the configured DNS server.
+func (f *filter) shouldForwardDNS(ip net.IP, port uint16) bool {
+	if port != 53 {
+		return false
+	}
+
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+
+	// Never forward to paqet server.
+	if addr == f.serverIP {
+		return false
+	}
+
+	// Drop loopback DNS.
+	if addr.IsLoopback() {
+		return false
+	}
+
+	// Allow DNS to private IPs (will be redirected to configured DNS).
+	// Allow DNS to public IPs (will go through tunnel).
+	return true
+}
+
+// IsDNS returns true if the destination port is DNS (53).
+func (f *filter) IsDNS(port uint16) bool {
+	return port == 53
 }

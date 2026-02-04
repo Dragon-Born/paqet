@@ -16,11 +16,35 @@ func (t *TUN) setupUDPForwarder() {
 	fwd := udp.NewForwarder(t.ns.s, func(r *udp.ForwarderRequest) bool {
 		id := r.ID()
 		dstIP := addrToNetIP(id.LocalAddress)
-		if !t.filter.shouldForward(dstIP) {
-			return true // drop — don't tunnel this traffic
+		dstPort := id.LocalPort
+
+		// Check if this is DNS traffic (port 53).
+		isDNS := t.filter.IsDNS(dstPort)
+
+		// For DNS: allow even if destination is private (will redirect to configured DNS).
+		// For non-DNS: use normal filtering.
+		if isDNS {
+			if !t.filter.shouldForwardDNS(dstIP, dstPort) {
+				return true // drop
+			}
+		} else {
+			if !t.filter.shouldForward(dstIP) {
+				return true // drop — don't tunnel this traffic
+			}
 		}
+
 		localAddr := fmt.Sprintf("%s:%d", formatAddr(id.RemoteAddress), id.RemotePort)
-		targetAddr := fmt.Sprintf("%s:%d", dstIP, id.LocalPort)
+
+		// For DNS traffic, redirect to configured DNS server.
+		var targetAddr string
+		if isDNS {
+			targetAddr = fmt.Sprintf("%s:%d", t.filter.DNSServer(), dstPort)
+			if dstIP.String() != t.filter.DNSServer() {
+				flog.Debugf("TUN DNS: redirecting %s -> %s (was %s)", localAddr, targetAddr, dstIP)
+			}
+		} else {
+			targetAddr = fmt.Sprintf("%s:%d", dstIP, dstPort)
+		}
 
 		var wq waiter.Queue
 		ep, err := r.CreateEndpoint(&wq)

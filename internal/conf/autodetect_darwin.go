@@ -130,3 +130,8 @@ func normalizeMAC(mac string) string {
 	}
 	return strings.Join(parts, ":")
 }
+
+// detectGUIDForInterface is a no-op on macOS (GUID only needed on Windows).
+func detectGUIDForInterface(_ string) (string, error) {
+	return "", fmt.Errorf("GUID detection not applicable on macOS")
+}

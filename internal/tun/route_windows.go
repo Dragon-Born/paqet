@@ -20,9 +20,11 @@ func newRouteManager() routeManager {
 	return &windowsRouteManager{}
 }
 
-func (r *windowsRouteManager) addRoutes(tunName, tunAddr, serverIP string) error {
+func (r *windowsRouteManager) addRoutes(tunName, tunAddr, serverIP, dnsIP string) error {
 	r.serverIP = serverIP
 	r.tunAddr = tunAddr
+	// TODO: Implement DNS configuration for Windows (netsh interface ip set dns)
+	_ = dnsIP
 
 	prefix, err := netip.ParsePrefix(tunAddr)
 	if err != nil {

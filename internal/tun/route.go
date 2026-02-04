@@ -1,6 +1,6 @@
 package tun
 
 type routeManager interface {
-	addRoutes(tunName, tunAddr, serverIP string) error
+	addRoutes(tunName, tunAddr, serverIP, dnsIP string) error
 	removeRoutes() error
 }

@@ -21,6 +21,13 @@ func DetectNetwork() (*NetworkInfo, error) {
 	info.Interface = iface
 	info.GatewayIP = gateway
 
+	// Get GUID for the interface (required for Npcap on Windows).
+	guid, err := getInterfaceGUID(iface)
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect interface GUID: %w", err)
+	}
+	info.GUID = guid
+
 	// Get local IP from interface.
 	localIP, err := detectLocalIP(iface)
 	if err != nil {
@@ -166,4 +173,82 @@ func lookupARP(ip string) (string, error) {
 	}
 
 	return "", nil
+}
+
+// detectGUIDForInterface is the exported wrapper for GUID detection.
+func detectGUIDForInterface(ifaceName string) (string, error) {
+	return getInterfaceGUID(ifaceName)
+}
+
+// getInterfaceGUID retrieves the Npcap device GUID for the given interface name.
+func getInterfaceGUID(ifaceName string) (string, error) {
+	// Use getmac to get the transport name which contains the GUID.
+	// Output format: "Connection Name","Network Adapter","Physical Address","Transport Name"
+	out, err := exec.Command("getmac", "/v", "/fo", "csv").Output()
+	if err != nil {
+		return "", fmt.Errorf("getmac command failed: %w", err)
+	}
+
+	// Parse CSV output to find the interface.
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines[1:] { // Skip header
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Parse CSV fields (simple parsing, handles quoted fields).
+		fields := parseCSVLine(line)
+		if len(fields) < 4 {
+			continue
+		}
+
+		// Field 0 is connection name, field 3 is transport name.
+		connName := fields[0]
+		transportName := fields[3]
+
+		if connName == ifaceName {
+			// Extract GUID from transport name.
+			// Format: \Device\Tcpip_{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
+			guid := extractGUID(transportName)
+			if guid != "" {
+				// Convert to NPF format for Npcap.
+				return "\\Device\\NPF_" + guid, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("GUID not found for interface %s", ifaceName)
+}
+
+// parseCSVLine parses a single CSV line with quoted fields.
+func parseCSVLine(line string) []string {
+	var fields []string
+	var field strings.Builder
+	inQuotes := false
+
+	for _, r := range line {
+		switch {
+		case r == '"':
+			inQuotes = !inQuotes
+		case r == ',' && !inQuotes:
+			fields = append(fields, field.String())
+			field.Reset()
+		default:
+			field.WriteRune(r)
+		}
+	}
+	fields = append(fields, field.String())
+
+	return fields
+}
+
+// extractGUID extracts the GUID from a transport name like \Device\Tcpip_{GUID}.
+func extractGUID(transportName string) string {
+	start := strings.Index(transportName, "{")
+	end := strings.Index(transportName, "}")
+	if start >= 0 && end > start {
+		return transportName[start : end+1]
+	}
+	return ""
 }

@@ -11,17 +11,19 @@ import (
 )
 
 type darwinRouteManager struct {
-	origGateway string
-	origIface   string
-	serverIP    string
-	tunAddr     string
+	origGateway    string
+	origIface      string
+	serverIP       string
+	tunAddr        string
+	networkService string   // e.g., "Wi-Fi", "Ethernet"
+	origDNS        []string // original DNS servers
 }
 
 func newRouteManager() routeManager {
 	return &darwinRouteManager{}
 }
 
-func (r *darwinRouteManager) addRoutes(tunName, tunAddr, serverIP string) error {
+func (r *darwinRouteManager) addRoutes(tunName, tunAddr, serverIP, dnsIP string) error {
 	r.serverIP = serverIP
 	r.tunAddr = tunAddr
 
@@ -56,6 +58,17 @@ func (r *darwinRouteManager) addRoutes(tunName, tunAddr, serverIP string) error 
 		return fmt.Errorf("failed to set default route via TUN: %w", err)
 	}
 
+	// Configure system DNS to use tunnel DNS (like WireGuard does).
+	// This preserves LAN access while ensuring DNS goes through the tunnel.
+	if dnsIP != "" {
+		if err := r.setupDNS(iface, dnsIP); err != nil {
+			flog.Warnf("TUN DNS: failed to configure system DNS: %v", err)
+			flog.Infof("TUN DNS: traffic to port 53 will still be redirected via gVisor")
+		} else {
+			flog.Infof("TUN DNS: system DNS set to %s (LAN access preserved)", dnsIP)
+		}
+	}
+
 	flog.Infof("TUN route: default route via %s (%s), server %s via %s", ip, tunName, serverIP, gw)
 	return nil
 }
@@ -65,6 +78,15 @@ func (r *darwinRouteManager) removeRoutes() error {
 	save := func(err error) {
 		if err != nil && firstErr == nil {
 			firstErr = err
+		}
+	}
+
+	// Restore original DNS settings.
+	if r.networkService != "" {
+		if err := r.restoreDNS(); err != nil {
+			flog.Warnf("TUN DNS: failed to restore DNS: %v", err)
+		} else {
+			flog.Infof("TUN DNS: restored original DNS settings")
 		}
 	}
 
@@ -111,4 +133,91 @@ func run(name string, args ...string) error {
 		return fmt.Errorf("%s %s: %s: %w", name, strings.Join(args, " "), strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// setupDNS configures system DNS to use the specified server.
+// This is the WireGuard approach - change system DNS instead of routing gateway.
+func (r *darwinRouteManager) setupDNS(iface, dnsIP string) error {
+	// Find network service name for the interface.
+	service, err := r.getNetworkService(iface)
+	if err != nil {
+		return fmt.Errorf("failed to find network service for %s: %w", iface, err)
+	}
+	r.networkService = service
+
+	// Save original DNS settings.
+	r.origDNS = r.getCurrentDNS(service)
+	flog.Debugf("TUN DNS: original DNS for %s: %v", service, r.origDNS)
+
+	// Set new DNS.
+	if err := run("networksetup", "-setdnsservers", service, dnsIP); err != nil {
+		return fmt.Errorf("failed to set DNS: %w", err)
+	}
+
+	return nil
+}
+
+// restoreDNS restores the original DNS settings.
+func (r *darwinRouteManager) restoreDNS() error {
+	if r.networkService == "" {
+		return nil
+	}
+	if len(r.origDNS) == 0 {
+		// Was using DHCP DNS, clear manual settings.
+		return run("networksetup", "-setdnsservers", r.networkService, "Empty")
+	}
+	args := append([]string{"-setdnsservers", r.networkService}, r.origDNS...)
+	return run("networksetup", args...)
+}
+
+// getNetworkService finds the network service name for a given interface.
+func (r *darwinRouteManager) getNetworkService(iface string) (string, error) {
+	// Get hardware port info which maps interface to service name.
+	out, err := exec.Command("networksetup", "-listallhardwareports").Output()
+	if err != nil {
+		return "", err
+	}
+
+	// Parse output to find service name for our interface.
+	// Format:
+	// Hardware Port: Wi-Fi
+	// Device: en0
+	lines := strings.Split(string(out), "\n")
+	var currentService string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Hardware Port:") {
+			currentService = strings.TrimSpace(strings.TrimPrefix(line, "Hardware Port:"))
+		}
+		if strings.HasPrefix(line, "Device:") {
+			device := strings.TrimSpace(strings.TrimPrefix(line, "Device:"))
+			if device == iface {
+				return currentService, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no network service found for interface %s", iface)
+}
+
+// getCurrentDNS gets the current DNS servers for a network service.
+func (r *darwinRouteManager) getCurrentDNS(service string) []string {
+	out, err := exec.Command("networksetup", "-getdnsservers", service).Output()
+	if err != nil {
+		return nil
+	}
+
+	dnsStr := strings.TrimSpace(string(out))
+	if strings.Contains(dnsStr, "There aren't any DNS Servers") {
+		return nil // Using DHCP DNS
+	}
+
+	var servers []string
+	for _, line := range strings.Split(dnsStr, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			servers = append(servers, line)
+		}
+	}
+	return servers
 }
