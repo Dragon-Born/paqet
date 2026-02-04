@@ -8,6 +8,7 @@ on:
 
 permissions:
     contents: write
+    packages: write
 
 jobs:
     build-linux:
@@ -53,8 +54,8 @@ jobs:
             - name: Build
               run: |
                   mkdir -p dist
-                  export CGO_ENABLED=1 
-                  export GOOS=linux 
+                  export CGO_ENABLED=1
+                  export GOOS=linux
                   export GOARCH=${{ matrix.goarch }}
                   export VERSION=${{ steps.ref_id.outputs.ref }}
                   export GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -73,7 +74,7 @@ jobs:
                     -X 'paqet/cmd/version.GitCommit=${GIT_COMMIT}' \
                     -X 'paqet/cmd/version.GitTag=${GIT_TAG}' \
                     -X 'paqet/cmd/version.BuildTime=${BUILD_TIME}'" \
-                    -o paqet_linux_${{ matrix.goarch }} ./cmd/main.go
+                    -o paqet_linux_${{ matrix.goarch }} ./cmd/
 
                   chmod +x paqet_linux_${{ matrix.goarch }}
                   tar -czvf dist/paqet-linux-${{ matrix.goarch }}-${{ steps.ref_id.outputs.ref }}.tar.gz \
@@ -87,6 +88,81 @@ jobs:
               with:
                   name: paqet-linux-${{ matrix.goarch }}
                   path: dist/paqet-linux-${{ matrix.goarch }}-${{ steps.ref_id.outputs.ref }}.tar.gz
+                  retention-days: 1
+
+    build-linux-nopcap:
+        runs-on: ubuntu-latest
+        container:
+            image: golang:1.25
+        strategy:
+            matrix:
+                goarch: [amd64, arm64]
+
+        steps:
+            - name: Setup Build Environment
+              run: |
+                  set -e
+                  apt-get update
+                  if [ "${{ matrix.goarch }}" = "arm64" ]; then
+                    dpkg --add-architecture arm64
+                    apt-get update
+                    apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+                  else
+                    apt-get install -y --no-install-recommends build-essential
+                  fi
+
+            - name: Checkout Code
+              uses: actions/checkout@v5
+
+            - name: Mark repo as safe
+              run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
+            - name: Get tag or commit
+              id: ref_id
+              shell: bash
+              run: |
+                  if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+                    REF_ID="${GITHUB_REF#refs/tags/}"
+                    echo "Triggered by tag: $REF_ID"
+                  else
+                    REF_ID=$(git rev-parse --short HEAD)
+                    echo "No tag detected. Using commit hash: $REF_ID"
+                  fi
+                  echo "ref=$REF_ID" >> $GITHUB_OUTPUT
+
+            - name: Build (nopcap - AF_PACKET only)
+              run: |
+                  mkdir -p dist
+                  export CGO_ENABLED=0
+                  export GOOS=linux
+                  export GOARCH=${{ matrix.goarch }}
+                  export VERSION=${{ steps.ref_id.outputs.ref }}
+                  export GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+                  export GIT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "unknown")
+                  export BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+                  go build -v -a -trimpath \
+                    -tags nopcap \
+                    -gcflags "all=-l=4" \
+                    -ldflags "-s -w -buildid= \
+                    -X 'paqet/cmd/version.Version=${VERSION}' \
+                    -X 'paqet/cmd/version.GitCommit=${GIT_COMMIT}' \
+                    -X 'paqet/cmd/version.GitTag=${GIT_TAG}' \
+                    -X 'paqet/cmd/version.BuildTime=${BUILD_TIME}'" \
+                    -o paqet_linux_${{ matrix.goarch }}_nopcap ./cmd/
+
+                  chmod +x paqet_linux_${{ matrix.goarch }}_nopcap
+                  tar -czvf dist/paqet-linux-${{ matrix.goarch }}-nopcap-${{ steps.ref_id.outputs.ref }}.tar.gz \
+                    paqet_linux_${{ matrix.goarch }}_nopcap \
+                    README.md \
+                    example/client.yaml.example \
+                    example/server.yaml.example
+
+            - name: Upload Artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: paqet-linux-${{ matrix.goarch }}-nopcap
+                  path: dist/paqet-linux-${{ matrix.goarch }}-nopcap-${{ steps.ref_id.outputs.ref }}.tar.gz
                   retention-days: 1
 
     build-windows:
@@ -127,8 +203,8 @@ jobs:
               shell: bash
               run: |
                   mkdir -p dist
-                  export CGO_ENABLED=1 
-                  export GOOS=windows 
+                  export CGO_ENABLED=1
+                  export GOOS=windows
                   export GOARCH=${{ matrix.goarch }}
                   export VERSION=${{ steps.ref_id.outputs.ref }}
                   export GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -142,7 +218,7 @@ jobs:
                     -X 'paqet/cmd/version.GitCommit=${GIT_COMMIT}' \
                     -X 'paqet/cmd/version.GitTag=${GIT_TAG}' \
                     -X 'paqet/cmd/version.BuildTime=${BUILD_TIME}'" \
-                    -o paqet_windows_${{ matrix.goarch }}.exe ./cmd/main.go
+                    -o paqet_windows_${{ matrix.goarch }}.exe ./cmd/
 
                   7z a -tzip dist/paqet-windows-${{ matrix.goarch }}-${{ steps.ref_id.outputs.ref }}.zip \
                     paqet_windows_${{ matrix.goarch }}.exe \
@@ -186,8 +262,8 @@ jobs:
             - name: Build
               run: |
                   mkdir -p dist
-                  export CGO_ENABLED=1 
-                  export GOOS=darwin 
+                  export CGO_ENABLED=1
+                  export GOOS=darwin
                   export GOARCH=${{ matrix.goarch }}
                   export VERSION=${{ steps.ref_id.outputs.ref }}
                   export GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -201,7 +277,7 @@ jobs:
                     -X 'paqet/cmd/version.GitCommit=${GIT_COMMIT}' \
                     -X 'paqet/cmd/version.GitTag=${GIT_TAG}' \
                     -X 'paqet/cmd/version.BuildTime=${BUILD_TIME}'" \
-                    -o paqet_darwin_${{ matrix.goarch }} ./cmd/main.go
+                    -o paqet_darwin_${{ matrix.goarch }} ./cmd/
 
                   chmod +x paqet_darwin_${{ matrix.goarch }}
                   tar -czvf dist/paqet-darwin-${{ matrix.goarch }}-${{ steps.ref_id.outputs.ref }}.tar.gz \
@@ -217,9 +293,64 @@ jobs:
                   path: dist/paqet-darwin-${{ matrix.goarch }}-${{ steps.ref_id.outputs.ref }}.tar.gz
                   retention-days: 1
 
+    build-container-mikrotik:
+        runs-on: ubuntu-latest
+        needs: [build-linux-nopcap]
+        strategy:
+            matrix:
+                arch: [amd64, arm64]
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v5
+
+            - name: Get tag or commit
+              id: ref_id
+              run: |
+                  if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+                    REF_ID="${GITHUB_REF#refs/tags/}"
+                    echo "Triggered by tag: $REF_ID"
+                  else
+                    REF_ID=$(git rev-parse --short HEAD)
+                    echo "No tag detected. Using commit hash: $REF_ID"
+                  fi
+                  echo "ref=$REF_ID" >> $GITHUB_OUTPUT
+
+            - name: Download nopcap binary
+              uses: actions/download-artifact@v4
+              with:
+                  name: paqet-linux-${{ matrix.arch }}-nopcap
+
+            - name: Extract binary
+              run: |
+                  tar -xzf paqet-linux-${{ matrix.arch }}-nopcap-*.tar.gz
+                  ls -la paqet_linux_*_nopcap
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Login to GitHub Container Registry
+              uses: docker/login-action@v3
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Build and push container
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  file: ./Dockerfile.mikrotik
+                  platforms: linux/${{ matrix.arch }}
+                  push: true
+                  build-args: |
+                      TARGETARCH=${{ matrix.arch }}
+                  tags: |
+                      ghcr.io/${{ github.repository }}:mikrotik-${{ matrix.arch }}
+                      ghcr.io/${{ github.repository }}:mikrotik-${{ matrix.arch }}-${{ steps.ref_id.outputs.ref }}
+
     release:
         runs-on: ubuntu-latest
-        needs: [build-linux, build-darwin, build-windows]
+        needs: [build-linux, build-linux-nopcap, build-darwin, build-windows, build-container-mikrotik]
         if: startsWith(github.ref, 'refs/tags/')
         steps:
             - name: Download all build artifacts

@@ -1,0 +1,58 @@
+# MikroTik Container Client Configuration
+#
+# This config is designed for running paqet in a MikroTik container.
+# The container uses AF_PACKET backend (no libpcap required).
+#
+# Available container images (architecture-specific):
+#   - ghcr.io/YOUR_ORG/paqet:mikrotik-arm64  (for ARM64 devices like hAP ax3, RB5009)
+#   - ghcr.io/YOUR_ORG/paqet:mikrotik-amd64  (for x86 devices like CHR, RB1100AHx4)
+#
+# MikroTik Setup:
+#   1. Enable container mode: /system/device-mode/update container=yes
+#   2. Create veth interface: /interface/veth/add name=veth-paqet address=172.17.0.2/24 gateway=172.17.0.1
+#   3. Create bridge: /interface/bridge/add name=containers
+#   4. Add IP to bridge: /ip/address/add address=172.17.0.1/24 interface=containers
+#   5. Add veth to bridge: /interface/bridge/port add bridge=containers interface=veth-paqet
+#   6. Add NAT: /ip/firewall/nat/add chain=srcnat action=masquerade src-address=172.17.0.0/24
+#   7. Create container mount for config: /container/mounts/add name=paqet-config src=disk1/paqet dst=/config
+#   8. Add container (use correct arch for your device):
+#      /container/add remote-image=ghcr.io/YOUR_ORG/paqet:mikrotik-arm64 \
+#        interface=veth-paqet root-dir=disk1/containers/paqet \
+#        mounts=paqet-config start-on-boot=yes logging=yes
+
+role: "client"
+
+network:
+  # Use the veth interface name as seen inside the container
+  # MikroTik veth interfaces appear as eth0 inside the container
+  interface: "eth0"
+
+  # Port for raw TCP packet communication
+  port: 44443
+
+  pcap:
+    # AF_PACKET is the only backend in nopcap builds
+    backend: "afpacket"
+    sockbuf: 4194304  # 4MB buffer
+
+transport:
+  protocol: "kcp"
+
+  kcp:
+    preset: "fast3"
+
+  connection:
+    count: 2
+    timeout: 30s
+
+server:
+  # Your paqet server address
+  address: "your-server.example.com:44443"
+  secret: "your-32-byte-secret-key-here!!!"
+
+socks5:
+  # SOCKS5 proxy listening address (accessible from MikroTik LAN)
+  listen: "0.0.0.0:1080"
+
+log:
+  level: "info"

@@ -1,0 +1,33 @@
+# Dockerfile for MikroTik Container
+# Builds a minimal Alpine-based container with paqet (AF_PACKET backend)
+#
+# Available images (use correct arch for your MikroTik device):
+#   ghcr.io/YOUR_ORG/paqet:mikrotik-arm64  - ARM64 (hAP ax3, RB5009, etc.)
+#   ghcr.io/YOUR_ORG/paqet:mikrotik-amd64  - x86 (CHR, RB1100AHx4, etc.)
+#
+# Usage on MikroTik:
+#   /container/config/set registry-url=https://ghcr.io
+#   /container/add remote-image=YOUR_ORG/paqet:mikrotik-arm64 ...
+
+FROM alpine:3.21
+
+# Install ca-certificates for TLS connections
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+
+# Copy the pre-built binary (TARGETARCH is set by --build-arg or --platform)
+ARG TARGETARCH
+COPY paqet_linux_${TARGETARCH}_nopcap /app/paqet
+
+# Make executable
+RUN chmod +x /app/paqet
+
+# Default config location
+VOLUME ["/config"]
+
+# Run as root (required for AF_PACKET raw socket access)
+USER root
+
+ENTRYPOINT ["/app/paqet"]
+CMD ["run", "-c", "/config/config.yaml"]

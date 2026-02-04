@@ -50,8 +50,8 @@ jobs:
             - name: Build
               run: |
                   mkdir -p dist
-                  export CGO_ENABLED=1 
-                  export GOOS=linux 
+                  export CGO_ENABLED=1
+                  export GOOS=linux
                   export GOARCH=${{ matrix.goarch }}
                   export VERSION=${{ steps.ref_id.outputs.ref }}
                   export GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -69,7 +69,7 @@ jobs:
                     -X 'paqet/cmd/version.GitCommit=${GIT_COMMIT}' \
                     -X 'paqet/cmd/version.GitTag=${GIT_TAG}' \
                     -X 'paqet/cmd/version.BuildTime=${BUILD_TIME}'" \
-                    -o paqet_linux_${{ matrix.goarch }} ./cmd/main.go
+                    -o paqet_linux_${{ matrix.goarch }} ./cmd/
 
                   chmod +x paqet_linux_${{ matrix.goarch }}
                   tar -czvf dist/paqet-linux-${{ matrix.goarch }}-${{ steps.ref_id.outputs.ref }}.tar.gz \

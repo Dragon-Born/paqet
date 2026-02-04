@@ -16,7 +16,6 @@ import (
 
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
-	"github.com/gopacket/gopacket/pcap"
 )
 
 type TCPF struct {
@@ -38,7 +37,7 @@ type SendHandle struct {
 	startTime time.Time
 
 	// Pointer/slice fields
-	handle      *pcap.Handle
+	handle      RawHandle
 	srcIPv4     net.IP
 	srcIPv4RHWA net.HardwareAddr
 	srcIPv6     net.IP
@@ -73,13 +72,13 @@ func randRange(lo, hi int) int {
 func NewSendHandle(cfg *conf.Network) (*SendHandle, error) {
 	handle, err := newHandle(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open pcap handle: %w", err)
+		return nil, fmt.Errorf("failed to open raw handle: %w", err)
 	}
 
 	// SetDirection is not fully supported on Windows Npcap, so skip it
 	if runtime.GOOS != "windows" {
-		if err := handle.SetDirection(pcap.DirectionOut); err != nil {
-			return nil, fmt.Errorf("failed to set pcap direction out: %v", err)
+		if err := handle.SetDirection(DirectionOut); err != nil {
+			return nil, fmt.Errorf("failed to set direction out: %v", err)
 		}
 	}
 

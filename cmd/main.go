@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"paqet/cmd/dump"
 	"paqet/cmd/iface"
 	"paqet/cmd/ping"
 	"paqet/cmd/run"
@@ -21,11 +20,11 @@ var rootCmd = &cobra.Command{
 
 func main() {
 	rootCmd.AddCommand(run.Cmd)
-	rootCmd.AddCommand(dump.Cmd)
 	rootCmd.AddCommand(ping.Cmd)
 	rootCmd.AddCommand(secret.Cmd)
 	rootCmd.AddCommand(iface.Cmd)
 	rootCmd.AddCommand(version.Cmd)
+	registerPlatformCommands(rootCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		flog.Errorf("%v", err)

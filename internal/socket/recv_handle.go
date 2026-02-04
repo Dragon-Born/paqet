@@ -8,11 +8,10 @@ import (
 
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
-	"github.com/gopacket/gopacket/pcap"
 )
 
 type RecvHandle struct {
-	handle  *pcap.Handle
+	handle  RawHandle
 	eth     layers.Ethernet
 	ipv4    layers.IPv4
 	ipv6    layers.IPv6
@@ -24,13 +23,13 @@ type RecvHandle struct {
 func NewRecvHandle(cfg *conf.Network) (*RecvHandle, error) {
 	handle, err := newHandle(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open pcap handle: %w", err)
+		return nil, fmt.Errorf("failed to open raw handle: %w", err)
 	}
 
 	// SetDirection is not fully supported on Windows Npcap, so skip it
 	if runtime.GOOS != "windows" {
-		if err := handle.SetDirection(pcap.DirectionIn); err != nil {
-			return nil, fmt.Errorf("failed to set pcap direction in: %v", err)
+		if err := handle.SetDirection(DirectionIn); err != nil {
+			return nil, fmt.Errorf("failed to set direction in: %v", err)
 		}
 	}
 

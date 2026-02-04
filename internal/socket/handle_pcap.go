@@ -1,3 +1,5 @@
+//go:build !linux
+
 package socket
 
 import (
@@ -5,10 +7,18 @@ import (
 	"paqet/internal/conf"
 	"runtime"
 
+	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/pcap"
 )
 
-func newHandle(cfg *conf.Network) (*pcap.Handle, error) {
+// pcapHandle wraps a pcap.Handle to implement RawHandle interface.
+type pcapHandle struct {
+	handle *pcap.Handle
+}
+
+// newHandle creates a new RawHandle using pcap.
+// On non-Linux platforms (macOS, Windows), pcap is the only option.
+func newHandle(cfg *conf.Network) (RawHandle, error) {
 	// On Windows, use the GUID field to construct the NPF device name
 	// On other platforms, use the interface name directly
 	ifaceName := cfg.Interface.Name
@@ -44,5 +54,36 @@ func newHandle(cfg *conf.Network) (*pcap.Handle, error) {
 		return nil, fmt.Errorf("failed to activate pcap handle on %s: %v", cfg.Interface.Name, err)
 	}
 
-	return handle, nil
+	return &pcapHandle{handle: handle}, nil
+}
+
+func (h *pcapHandle) ZeroCopyReadPacketData() ([]byte, gopacket.CaptureInfo, error) {
+	return h.handle.ZeroCopyReadPacketData()
+}
+
+func (h *pcapHandle) WritePacketData(data []byte) error {
+	return h.handle.WritePacketData(data)
+}
+
+func (h *pcapHandle) SetBPFFilter(filter string) error {
+	return h.handle.SetBPFFilter(filter)
+}
+
+func (h *pcapHandle) SetDirection(dir Direction) error {
+	var pcapDir pcap.Direction
+	switch dir {
+	case DirectionIn:
+		pcapDir = pcap.DirectionIn
+	case DirectionOut:
+		pcapDir = pcap.DirectionOut
+	case DirectionInOut:
+		pcapDir = pcap.DirectionInOut
+	}
+	return h.handle.SetDirection(pcapDir)
+}
+
+func (h *pcapHandle) Close() {
+	if h.handle != nil {
+		h.handle.Close()
+	}
 }
