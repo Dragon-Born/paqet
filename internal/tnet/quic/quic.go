@@ -61,7 +61,7 @@ func deterministicCert(key string) (tls.Certificate, error) {
 
 	priv := &ecdsa.PrivateKey{
 		PublicKey: ecdsa.PublicKey{Curve: curve},
-		D:        d,
+		D:         d,
 	}
 	priv.PublicKey.X, priv.PublicKey.Y = curve.ScalarBaseMult(d.Bytes())
 
@@ -123,6 +123,7 @@ func buildQUICConfig(cfg *conf.QUIC) *quic.Config {
 		MaxIdleTimeout:                 cfg.IdleTimeout,
 		KeepAlivePeriod:                cfg.IdleTimeout / 3,
 		Allow0RTT:                      true,
+		EnableDatagrams:                true, // Enable unreliable datagrams for UDP forwarding
 		InitialStreamReceiveWindow:     cfg.InitialStreamWindow,
 		MaxStreamReceiveWindow:         cfg.MaxStreamWindow,
 		InitialConnectionReceiveWindow: cfg.InitialConnWindow,

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"paqet/internal/flog"
 	"paqet/internal/pkg/hash"
 	"paqet/internal/protocol"
@@ -94,4 +95,78 @@ func (c *Client) CloseUDPStream(strm tnet.Strm) {
 
 func (c *Client) CloseUDP(key uint64) error {
 	return c.udpPool.delete(key)
+}
+
+// UDPDatagramSession represents a datagram-based UDP forwarding session.
+// Uses QUIC datagrams for unreliable, high-throughput UDP forwarding.
+type UDPDatagramSession struct {
+	conn   tnet.DatagramConn
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// UDPDatagramNew creates a new datagram-based UDP session if the transport supports it.
+// Returns nil if datagrams are not supported (caller should fall back to streams).
+func (c *Client) UDPDatagramNew(ctx context.Context, tAddr string) (*UDPDatagramSession, error) {
+	// Get a connection and check if it supports datagrams
+	tc := c.iter.Next()
+	if tc == nil {
+		return nil, nil // No connections available
+	}
+
+	conn := tc.getConn()
+	if conn == nil {
+		return nil, nil
+	}
+
+	// Check if connection supports datagrams
+	dgConn, ok := conn.(tnet.DatagramConn)
+	if !ok || !dgConn.SupportsDatagrams() {
+		flog.Debugf("connection doesn't support datagrams, falling back to streams")
+		return nil, nil
+	}
+
+	// Open a control stream to register the datagram session
+	strm, err := conn.OpenStrm()
+	if err != nil {
+		return nil, err
+	}
+
+	taddr, err := tnet.NewAddr(tAddr)
+	if err != nil {
+		strm.Close()
+		return nil, err
+	}
+
+	// Send PUDPDGM protocol header to register datagram mode
+	p := protocol.Proto{Type: protocol.PUDPDGM, Addr: taddr}
+	if err := p.Write(strm); err != nil {
+		strm.Close()
+		return nil, err
+	}
+	strm.Close() // Control stream no longer needed
+
+	sessCtx, cancel := context.WithCancel(ctx)
+	flog.Infof("established UDP datagram session for -> %s", tAddr)
+
+	return &UDPDatagramSession{
+		conn:   dgConn,
+		ctx:    sessCtx,
+		cancel: cancel,
+	}, nil
+}
+
+// Send sends a UDP packet via QUIC datagram.
+func (s *UDPDatagramSession) Send(data []byte) error {
+	return s.conn.SendDatagram(data)
+}
+
+// Receive receives a UDP packet via QUIC datagram.
+func (s *UDPDatagramSession) Receive() ([]byte, error) {
+	return s.conn.ReceiveDatagram(s.ctx)
+}
+
+// Close closes the datagram session.
+func (s *UDPDatagramSession) Close() {
+	s.cancel()
 }

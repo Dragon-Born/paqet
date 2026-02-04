@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"paqet/internal/flog"
 	"paqet/internal/pkg/buffer"
@@ -11,6 +12,17 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+// datagramSession tracks a datagram-based UDP session.
+type datagramSession struct {
+	conn   *net.UDPConn
+	addr   string
+	dgConn tnet.DatagramConn
+	cancel context.CancelFunc
+}
+
+// datagramSessionMap manages datagram sessions per connection.
+var datagramSessions sync.Map // dgConn -> *datagramSession
 
 // sharedUDPConn manages a shared UDP connection with multiple stream writers.
 // Critical for protocols like WireGuard that expect one source port per peer.
@@ -184,7 +196,87 @@ func (s *sharedUDPConn) removeStream(strm tnet.Strm) {
 
 func (s *Server) handleUDPProtocol(ctx context.Context, strm tnet.Strm, p *protocol.Proto) error {
 	flog.Infof("accepted UDP stream %d: %s -> %s", strm.SID(), strm.RemoteAddr(), p.Addr.String())
-	return s.handleUDP(ctx, strm, p.Addr.String())
+	addr := p.Addr.String()
+
+	// DNS (port 53) requires per-stream connections because responses must be
+	// correlated with requests by Transaction ID. Shared connections cause
+	// responses to be delivered to wrong clients (ID mismatch errors).
+	if p.Addr.Port == 53 {
+		return s.handleUDPDirect(ctx, strm, addr)
+	}
+
+	return s.handleUDP(ctx, strm, addr)
+}
+
+// handleUDPDirect handles UDP with a dedicated connection per stream.
+// Used for protocols like DNS where request-response correlation matters.
+func (s *Server) handleUDPDirect(ctx context.Context, strm tnet.Strm, addr string) error {
+	raddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return err
+	}
+
+	conn, err := net.DialUDP("udp", nil, raddr)
+	if err != nil {
+		flog.Errorf("failed to dial UDP to %s for stream %d: %v", addr, strm.SID(), err)
+		return err
+	}
+	defer conn.Close()
+
+	flog.Debugf("UDP stream %d direct connection to %s", strm.SID(), addr)
+
+	// Start response reader: target -> stream
+	go func() {
+		bufp := buffer.UPool.Get().(*[]byte)
+		defer buffer.UPool.Put(bufp)
+		buf := *bufp
+
+		for {
+			conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+			n, err := conn.Read(buf)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					continue
+				}
+				flog.Debugf("UDP stream %d read from %s ended: %v", strm.SID(), addr, err)
+				return
+			}
+
+			if err := buffer.WriteUDPFrame(strm, buf[:n]); err != nil {
+				flog.Debugf("UDP stream %d write to client failed: %v", strm.SID(), err)
+				return
+			}
+		}
+	}()
+
+	// Main loop: stream -> target
+	bufp := buffer.UPool.Get().(*[]byte)
+	defer buffer.UPool.Put(bufp)
+	buf := *bufp
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+
+		n, err := buffer.ReadUDPFrame(strm, buf)
+		if err != nil {
+			flog.Debugf("UDP stream %d to %s ended: %v", strm.SID(), addr, err)
+			return err
+		}
+
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if _, err := conn.Write(buf[:n]); err != nil {
+			flog.Debugf("UDP stream %d write to %s failed: %v", strm.SID(), addr, err)
+			return err
+		}
+		conn.SetWriteDeadline(time.Time{})
+	}
 }
 
 func (s *Server) handleUDP(ctx context.Context, strm tnet.Strm, addr string) error {
@@ -228,5 +320,123 @@ func (s *Server) handleUDP(ctx context.Context, strm tnet.Strm, addr string) err
 			return err
 		}
 		shared.conn.SetWriteDeadline(time.Time{})
+	}
+}
+
+// handleUDPDatagramProtocol sets up datagram mode for UDP forwarding.
+// This registers the target address and enables datagram-based data transfer.
+func (s *Server) handleUDPDatagramProtocol(ctx context.Context, conn tnet.Conn, strm tnet.Strm, p *protocol.Proto) error {
+	dgConn, ok := conn.(tnet.DatagramConn)
+	if !ok || !dgConn.SupportsDatagrams() {
+		flog.Errorf("connection doesn't support datagrams for PUDPDGM")
+		return fmt.Errorf("datagrams not supported")
+	}
+
+	addr := p.Addr.String()
+
+	// Check if session already exists for this connection
+	if _, loaded := datagramSessions.Load(dgConn); loaded {
+		flog.Debugf("datagram session already exists for %s, reusing", conn.RemoteAddr())
+		return nil // Already set up
+	}
+
+	// Create UDP connection to target
+	raddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return err
+	}
+
+	udpConn, err := net.DialUDP("udp", nil, raddr)
+	if err != nil {
+		return err
+	}
+
+	// Increase socket buffers
+	udpConn.SetReadBuffer(8 * 1024 * 1024)
+	udpConn.SetWriteBuffer(8 * 1024 * 1024)
+
+	sessCtx, cancel := context.WithCancel(ctx)
+	sess := &datagramSession{
+		conn:   udpConn,
+		addr:   addr,
+		dgConn: dgConn,
+		cancel: cancel,
+	}
+
+	datagramSessions.Store(dgConn, sess)
+
+	flog.Infof("established UDP datagram session %s -> %s", conn.RemoteAddr(), addr)
+
+	// Start UDP -> datagram goroutine (target responses -> client)
+	go func() {
+		defer func() {
+			datagramSessions.Delete(dgConn)
+			udpConn.Close()
+			cancel()
+			flog.Debugf("datagram session to %s closed", addr)
+		}()
+
+		buf := make([]byte, 65535)
+		for {
+			select {
+			case <-sessCtx.Done():
+				return
+			default:
+			}
+
+			udpConn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			n, err := udpConn.Read(buf)
+			if err != nil {
+				if sessCtx.Err() != nil {
+					return
+				}
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					continue
+				}
+				flog.Debugf("datagram session UDP read error: %v", err)
+				return
+			}
+
+			// Send response via QUIC datagram
+			if err := dgConn.SendDatagram(buf[:n]); err != nil {
+				flog.Debugf("datagram send error: %v", err)
+				// Don't return on send errors - datagrams are unreliable
+			}
+		}
+	}()
+
+	return nil // Stream handler returns immediately - datagrams are handled separately
+}
+
+// handleDatagrams processes incoming QUIC datagrams for a connection.
+// Called once per datagram-capable connection.
+func (s *Server) handleDatagrams(ctx context.Context, dgConn tnet.DatagramConn) {
+	flog.Debugf("starting datagram receiver for %s", dgConn.RemoteAddr())
+
+	for {
+		data, err := dgConn.ReceiveDatagram(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			flog.Debugf("datagram receive error: %v", err)
+			return
+		}
+
+		// Find the session for this connection
+		v, ok := datagramSessions.Load(dgConn)
+		if !ok {
+			// No session registered yet - drop packet
+			continue
+		}
+
+		sess := v.(*datagramSession)
+
+		// Write to target UDP
+		sess.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if _, err := sess.conn.Write(data); err != nil {
+			flog.Debugf("datagram forward to %s failed: %v", sess.addr, err)
+		}
+		sess.conn.SetWriteDeadline(time.Time{})
 	}
 }

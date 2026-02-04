@@ -80,3 +80,20 @@ func (c *Conn) RemoteAddr() net.Addr               { return c.QConn.RemoteAddr()
 func (c *Conn) SetDeadline(_ time.Time) error      { return nil }
 func (c *Conn) SetReadDeadline(_ time.Time) error  { return nil }
 func (c *Conn) SetWriteDeadline(_ time.Time) error { return nil }
+
+// SupportsDatagrams returns true if the connection supports QUIC datagrams.
+func (c *Conn) SupportsDatagrams() bool {
+	state := c.QConn.ConnectionState()
+	return state.SupportsDatagrams.Local && state.SupportsDatagrams.Remote
+}
+
+// SendDatagram sends an unreliable datagram over QUIC.
+// Returns error if datagrams not supported or payload too large.
+func (c *Conn) SendDatagram(data []byte) error {
+	return c.QConn.SendDatagram(data)
+}
+
+// ReceiveDatagram receives an unreliable datagram from QUIC.
+func (c *Conn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	return c.QConn.ReceiveDatagram(ctx)
+}

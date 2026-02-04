@@ -9,8 +9,8 @@ import (
 
 // Strm wraps a quic.Stream and implements tnet.Strm (which extends net.Conn).
 type Strm struct {
-	stream    *quic.Stream
-	localAddr net.Addr
+	stream     *quic.Stream
+	localAddr  net.Addr
 	remoteAddr net.Addr
 }
 
@@ -22,8 +22,8 @@ func (s *Strm) LocalAddr() net.Addr  { return s.localAddr }
 func (s *Strm) RemoteAddr() net.Addr { return s.remoteAddr }
 
 func (s *Strm) SetDeadline(t time.Time) error      { return s.stream.SetDeadline(t) }
-func (s *Strm) SetReadDeadline(t time.Time) error   { return s.stream.SetReadDeadline(t) }
-func (s *Strm) SetWriteDeadline(t time.Time) error  { return s.stream.SetWriteDeadline(t) }
+func (s *Strm) SetReadDeadline(t time.Time) error  { return s.stream.SetReadDeadline(t) }
+func (s *Strm) SetWriteDeadline(t time.Time) error { return s.stream.SetWriteDeadline(t) }
 
 func (s *Strm) SID() int {
 	return int(s.stream.StreamID())

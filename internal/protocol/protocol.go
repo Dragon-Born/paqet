@@ -12,12 +12,13 @@ import (
 type PType = byte
 
 const (
-	PPING PType = 0x01
-	PPONG PType = 0x02
-	PTCPF PType = 0x03
-	PTCP  PType = 0x04
-	PUDP  PType = 0x05
-	PICMP PType = 0x06
+	PPING   PType = 0x01
+	PPONG   PType = 0x02
+	PTCPF   PType = 0x03
+	PTCP    PType = 0x04
+	PUDP    PType = 0x05
+	PICMP   PType = 0x06
+	PUDPDGM PType = 0x07 // UDP with datagram mode (unreliable, high throughput)
 )
 
 var (
@@ -48,7 +49,7 @@ func (p *Proto) Read(r io.Reader) error {
 	switch p.Type {
 	case PPING, PPONG:
 		return nil
-	case PTCP, PUDP:
+	case PTCP, PUDP, PUDPDGM:
 		return p.readAddr(r)
 	case PTCPF:
 		return p.readTCPF(r)
@@ -67,7 +68,7 @@ func (p *Proto) Write(w io.Writer) error {
 	switch p.Type {
 	case PPING, PPONG:
 		return nil
-	case PTCP, PUDP:
+	case PTCP, PUDP, PUDPDGM:
 		return p.writeAddr(w)
 	case PTCPF:
 		return p.writeTCPF(w)

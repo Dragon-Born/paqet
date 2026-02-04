@@ -9,6 +9,15 @@ import (
 )
 
 func (s *Server) handleConn(ctx context.Context, conn tnet.Conn) {
+	// Check if connection supports datagrams
+	dgConn, supportsDg := conn.(tnet.DatagramConn)
+	if supportsDg && dgConn.SupportsDatagrams() {
+		// Start datagram receiver for this connection
+		s.wg.Go(func() {
+			s.handleDatagrams(ctx, dgConn)
+		})
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -31,7 +40,7 @@ func (s *Server) handleConn(ctx context.Context, conn tnet.Conn) {
 		s.wg.Go(func() {
 			defer func() { <-s.sem }()
 			defer strm.Close()
-			if err := s.handleStrm(ctx, strm); err != nil {
+			if err := s.handleStrm(ctx, conn, strm); err != nil {
 				flog.Errorf("stream %d from %s closed with error: %v", strm.SID(), strm.RemoteAddr(), err)
 			} else {
 				flog.Debugf("stream %d from %s closed", strm.SID(), strm.RemoteAddr())
@@ -40,7 +49,7 @@ func (s *Server) handleConn(ctx context.Context, conn tnet.Conn) {
 	}
 }
 
-func (s *Server) handleStrm(ctx context.Context, strm tnet.Strm) error {
+func (s *Server) handleStrm(ctx context.Context, conn tnet.Conn, strm tnet.Strm) error {
 	var p protocol.Proto
 	err := p.Read(strm)
 	if err != nil {
@@ -60,6 +69,8 @@ func (s *Server) handleStrm(ctx context.Context, strm tnet.Strm) error {
 		return s.handleTCPProtocol(ctx, strm, &p)
 	case protocol.PUDP:
 		return s.handleUDPProtocol(ctx, strm, &p)
+	case protocol.PUDPDGM:
+		return s.handleUDPDatagramProtocol(ctx, conn, strm, &p)
 	default:
 		flog.Errorf("unknown protocol type %d on stream %d", p.Type, strm.SID())
 		return fmt.Errorf("unknown protocol type: %d", p.Type)
