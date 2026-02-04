@@ -43,6 +43,7 @@ func newAfpacketHandle(cfg *conf.Network) (RawHandle, error) {
 		afpacket.OptBlockSize(afpacketBlockSize),
 		afpacket.OptNumBlocks(numBlocks),
 		afpacket.OptPollTimeout(-time.Millisecond), // -1ms → poll timeout of -1 (block forever)
+		afpacket.TPacketVersion2,                   // Use v2 for better compatibility (v3 can crash in containers)
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AF_PACKET handle on %s: %v", cfg.Interface.Name, err)
