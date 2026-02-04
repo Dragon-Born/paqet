@@ -33,6 +33,10 @@ func (f *Forward) listenUDP(ctx context.Context) {
 		return
 	}
 	defer conn.Close()
+
+	// Increase socket buffers for high-throughput scenarios (8MB each)
+	conn.SetReadBuffer(8 * 1024 * 1024)
+	conn.SetWriteBuffer(8 * 1024 * 1024)
 	go func() {
 		<-ctx.Done()
 		conn.Close()
@@ -108,11 +112,12 @@ func (f *Forward) listenUDP(ctx context.Context) {
 		}
 
 		// Create new session with buffered write channel
+		// Large buffer (4096) for high-throughput scenarios like WireGuard
 		sessCtx, sessCancel := context.WithCancel(ctx)
 		sess := &udpSession{
 			strm:    strm,
 			key:     strmKey,
-			writeCh: make(chan []byte, 256), // buffer up to 256 packets
+			writeCh: make(chan []byte, 4096), // buffer up to 4096 packets for high throughput
 			cancel:  sessCancel,
 		}
 
@@ -137,6 +142,7 @@ func (f *Forward) listenUDP(ctx context.Context) {
 
 // udpWriteLoop reads packets from the write channel and sends them to the stream.
 // Uses length-prefixed framing to preserve UDP datagram boundaries.
+// Optimized to drain multiple packets per iteration for high throughput.
 func (f *Forward) udpWriteLoop(ctx context.Context, sess *udpSession) {
 	var pktsWritten uint64
 	for {
@@ -145,14 +151,34 @@ func (f *Forward) udpWriteLoop(ctx context.Context, sess *udpSession) {
 			flog.Debugf("UDP stream %d writer stopping, wrote %d packets", sess.strm.SID(), pktsWritten)
 			return
 		case pkt := <-sess.writeCh:
+			// Set deadline once for this batch
 			sess.strm.SetWriteDeadline(time.Now().Add(5 * time.Second))
+
+			// Write first packet
 			if err := buffer.WriteUDPFrame(sess.strm, pkt); err != nil {
 				flog.Debugf("UDP stream %d write error after %d packets: %v", sess.strm.SID(), pktsWritten, err)
 				sess.cancel()
 				return
 			}
-			sess.strm.SetWriteDeadline(time.Time{})
 			pktsWritten++
+
+			// Drain any additional queued packets without blocking
+			drain := true
+			for drain {
+				select {
+				case pkt = <-sess.writeCh:
+					if err := buffer.WriteUDPFrame(sess.strm, pkt); err != nil {
+						flog.Debugf("UDP stream %d write error after %d packets: %v", sess.strm.SID(), pktsWritten, err)
+						sess.cancel()
+						return
+					}
+					pktsWritten++
+				default:
+					drain = false
+				}
+			}
+
+			sess.strm.SetWriteDeadline(time.Time{})
 		}
 	}
 }
