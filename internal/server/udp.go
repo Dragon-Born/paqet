@@ -7,6 +7,7 @@ import (
 	"paqet/internal/pkg/buffer"
 	"paqet/internal/protocol"
 	"paqet/internal/tnet"
+	"time"
 )
 
 func (s *Server) handleUDPProtocol(ctx context.Context, strm tnet.Strm, p *protocol.Proto) error {
@@ -27,19 +28,68 @@ func (s *Server) handleUDP(ctx context.Context, strm tnet.Strm, addr string) err
 	flog.Debugf("UDP connection established to %s for stream %d", addr, strm.SID())
 
 	errChan := make(chan error, 2)
+
+	// Stream -> target: read length-prefixed frames, write to UDP
 	go func() {
-		err := buffer.CopyU(conn, strm)
-		errChan <- err
+		bufp := buffer.UPool.Get().(*[]byte)
+		defer buffer.UPool.Put(bufp)
+		buf := *bufp
+
+		for {
+			select {
+			case <-ctx.Done():
+				errChan <- nil
+				return
+			default:
+			}
+
+			n, err := buffer.ReadUDPFrame(strm, buf)
+			if err != nil {
+				errChan <- err
+				return
+			}
+
+			conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if _, err := conn.Write(buf[:n]); err != nil {
+				errChan <- err
+				return
+			}
+			conn.SetWriteDeadline(time.Time{})
+		}
 	}()
+
+	// Target -> stream: read UDP datagrams, write as length-prefixed frames
 	go func() {
-		err := buffer.CopyU(strm, conn)
-		errChan <- err
+		bufp := buffer.UPool.Get().(*[]byte)
+		defer buffer.UPool.Put(bufp)
+		buf := *bufp
+
+		for {
+			select {
+			case <-ctx.Done():
+				errChan <- nil
+				return
+			default:
+			}
+
+			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			n, err := conn.Read(buf)
+			if err != nil {
+				errChan <- err
+				return
+			}
+
+			if err := buffer.WriteUDPFrame(strm, buf[:n]); err != nil {
+				errChan <- err
+				return
+			}
+		}
 	}()
 
 	select {
 	case err := <-errChan:
 		if err != nil {
-			flog.Errorf("UDP stream %d to %s failed: %v", strm.SID(), addr, err)
+			flog.Debugf("UDP stream %d to %s ended: %v", strm.SID(), addr, err)
 			return err
 		}
 	case <-ctx.Done():

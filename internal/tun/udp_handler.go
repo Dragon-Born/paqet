@@ -82,7 +82,7 @@ func (t *TUN) handleUDP(ctx context.Context, conn *gonet.UDPConn, localAddr, tar
 		return
 	}
 
-	if _, err := strm.Write(buf[:n]); err != nil {
+	if err := buffer.WriteUDPFrame(strm, buf[:n]); err != nil {
 		flog.Errorf("TUN UDP: failed to forward %d bytes from %s -> %s: %v", n, localAddr, targetAddr, err)
 		t.client.CloseUDP(key)
 		return
@@ -97,6 +97,7 @@ func (t *TUN) handleUDP(ctx context.Context, conn *gonet.UDPConn, localAddr, tar
 	flog.Debugf("TUN UDP: stream %d established for %s -> %s", strm.SID(), localAddr, targetAddr)
 
 	// Start reader: strm -> gVisor conn.
+	// Uses length-prefixed framing to preserve UDP datagram boundaries.
 	go func() {
 		defer func() {
 			flog.Debugf("TUN UDP: stream %d closed for %s -> %s", strm.SID(), localAddr, targetAddr)
@@ -112,7 +113,7 @@ func (t *TUN) handleUDP(ctx context.Context, conn *gonet.UDPConn, localAddr, tar
 			default:
 			}
 			strm.SetDeadline(time.Now().Add(8 * time.Second))
-			rn, err := strm.Read(rb)
+			rn, err := buffer.ReadUDPFrame(strm, rb)
 			strm.SetDeadline(time.Time{})
 			if err != nil {
 				flog.Debugf("TUN UDP: stream %d read error for %s -> %s: %v", strm.SID(), localAddr, targetAddr, err)
@@ -146,7 +147,7 @@ func (t *TUN) udpWriteLoop(ctx context.Context, conn *gonet.UDPConn, strm interf
 		if err != nil {
 			return
 		}
-		if _, err := strm.Write(buf[:n]); err != nil {
+		if err := buffer.WriteUDPFrame(strm, buf[:n]); err != nil {
 			flog.Debugf("TUN UDP: write error for %s -> %s: %v", localAddr, targetAddr, err)
 			return
 		}
