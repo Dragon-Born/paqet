@@ -17,8 +17,10 @@ import (
 type windowsRouteManager struct {
 	serverIP    string
 	tunAddr     string
+	tunName     string
 	origGateway string
 	ifIndex     int
+	dnsIP       string
 }
 
 func newRouteManager() routeManager {
@@ -28,8 +30,8 @@ func newRouteManager() routeManager {
 func (r *windowsRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP, dnsIP string) error {
 	r.serverIP = serverIP
 	r.tunAddr = tunAddr
-	// TODO: Implement DNS configuration for Windows (netsh interface ip set dns)
-	_ = dnsIP
+	r.tunName = tunName
+	r.dnsIP = dnsIP
 
 	// Get TUN interface index by name.
 	iface, err := net.InterfaceByName(tunName)
@@ -67,6 +69,15 @@ func (r *windowsRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, server
 		return fmt.Errorf("failed to add 128.0.0.0/1 route: %w", err)
 	}
 
+	// Configure DNS on the TUN interface.
+	if dnsIP != "" {
+		if err := r.setupDNS(tunName, dnsIP); err != nil {
+			flog.Warnf("TUN DNS: failed to configure: %v", err)
+		} else {
+			flog.Infof("TUN DNS: set to %s on %s", dnsIP, tunName)
+		}
+	}
+
 	flog.Infof("TUN route: default route via %s (%s, IF %d), server %s via %s", ip, tunName, r.ifIndex, serverIP, gw)
 	return nil
 }
@@ -76,6 +87,15 @@ func (r *windowsRouteManager) removeRoutes() error {
 	save := func(err error) {
 		if err != nil && firstErr == nil {
 			firstErr = err
+		}
+	}
+
+	// Restore DNS settings.
+	if r.dnsIP != "" && r.tunName != "" {
+		if err := r.restoreDNS(); err != nil {
+			flog.Warnf("TUN DNS: failed to restore: %v", err)
+		} else {
+			flog.Infof("TUN DNS: restored")
 		}
 	}
 
@@ -92,6 +112,32 @@ func (r *windowsRouteManager) removeRoutes() error {
 		flog.Infof("TUN route: restored original routes")
 	}
 	return firstErr
+}
+
+// setupDNS configures DNS on the TUN interface.
+func (r *windowsRouteManager) setupDNS(tunName, dnsIP string) error {
+	// Set a low interface metric so Windows prefers TUN's DNS over other interfaces.
+	// Windows uses the DNS server from the interface with the lowest metric.
+	_ = runWin("netsh", "interface", "ipv4", "set", "interface",
+		"interface="+tunName, "metric=1")
+
+	// Set DNS server on TUN interface with validate=no to skip connectivity check.
+	if err := runWin("netsh", "interface", "ipv4", "set", "dnsservers",
+		"name="+tunName, "static", dnsIP, "primary", "validate=no"); err != nil {
+		return fmt.Errorf("failed to set DNS: %w", err)
+	}
+
+	// Flush DNS cache to apply immediately.
+	_ = runWin("ipconfig", "/flushdns")
+
+	return nil
+}
+
+// restoreDNS removes DNS configuration from the TUN interface.
+func (r *windowsRouteManager) restoreDNS() error {
+	// Set DNS back to DHCP (automatic).
+	return runWin("netsh", "interface", "ipv4", "set", "dnsservers",
+		"name="+r.tunName, "dhcp", "validate=no")
 }
 
 func (r *windowsRouteManager) getDefaultGateway() (string, error) {
