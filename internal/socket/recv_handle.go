@@ -77,6 +77,7 @@ func (h *RecvHandle) Read() ([]byte, net.Addr, error) {
 	}
 
 	payload := h.tcp.Payload
+
 	if len(payload) == 0 {
 		return nil, addr, nil
 	}

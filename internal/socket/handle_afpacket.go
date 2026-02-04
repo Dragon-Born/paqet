@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"paqet/internal/conf"
 	"paqet/internal/flog"
+	"time"
 
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/afpacket"
@@ -41,7 +42,7 @@ func newAfpacketHandle(cfg *conf.Network) (RawHandle, error) {
 		afpacket.OptFrameSize(afpacketFrameSize),
 		afpacket.OptBlockSize(afpacketBlockSize),
 		afpacket.OptNumBlocks(numBlocks),
-		afpacket.OptPollTimeout(-1), // Block forever, like pcap.BlockForever
+		afpacket.OptPollTimeout(-time.Millisecond), // -1ms → poll timeout of -1 (block forever)
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AF_PACKET handle on %s: %v", cfg.Interface.Name, err)
@@ -66,7 +67,7 @@ func (h *afpacketHandle) ZeroCopyReadPacketData() ([]byte, gopacket.CaptureInfo,
 
 		// AF_PACKET doesn't have native direction filtering like pcap.
 		// We implement it by checking the source MAC address.
-		if h.direction != DirectionInOut && len(data) >= 14 {
+		if h.direction != DirectionInOut && len(data) >= 14 && len(h.srcMAC) == 6 {
 			srcMAC := data[6:12]
 			isOutgoing := macEqual(srcMAC, h.srcMAC)
 
