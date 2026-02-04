@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"paqet/internal/flog"
 	"strings"
+
+	wgtun "golang.zx2c4.com/wireguard/tun"
 )
 
 type darwinRouteManager struct {
@@ -23,7 +25,7 @@ func newRouteManager() routeManager {
 	return &darwinRouteManager{}
 }
 
-func (r *darwinRouteManager) addRoutes(tunName, tunAddr, serverIP, dnsIP string) error {
+func (r *darwinRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP, dnsIP string) error {
 	r.serverIP = serverIP
 	r.tunAddr = tunAddr
 

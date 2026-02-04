@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"paqet/internal/flog"
 	"strings"
+
+	wgtun "golang.zx2c4.com/wireguard/tun"
 )
 
 func run(name string, args ...string) error {
@@ -30,7 +32,7 @@ func newRouteManager() routeManager {
 	return &linuxRouteManager{}
 }
 
-func (r *linuxRouteManager) addRoutes(tunName, tunAddr, serverIP, dnsIP string) error {
+func (r *linuxRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP, dnsIP string) error {
 	r.serverIP = serverIP
 	r.tunName = tunName
 	r.tunAddr = tunAddr

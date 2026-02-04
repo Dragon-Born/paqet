@@ -4,33 +4,47 @@ package tun
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"os/exec"
 	"paqet/internal/flog"
+	"strconv"
 	"strings"
+
+	wgtun "golang.zx2c4.com/wireguard/tun"
 )
 
 type windowsRouteManager struct {
 	serverIP    string
 	tunAddr     string
 	origGateway string
+	ifIndex     int
 }
 
 func newRouteManager() routeManager {
 	return &windowsRouteManager{}
 }
 
-func (r *windowsRouteManager) addRoutes(tunName, tunAddr, serverIP, dnsIP string) error {
+func (r *windowsRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP, dnsIP string) error {
 	r.serverIP = serverIP
 	r.tunAddr = tunAddr
 	// TODO: Implement DNS configuration for Windows (netsh interface ip set dns)
 	_ = dnsIP
+
+	// Get TUN interface index by name.
+	iface, err := net.InterfaceByName(tunName)
+	if err != nil {
+		return fmt.Errorf("failed to get TUN interface: %w", err)
+	}
+	r.ifIndex = iface.Index
+	flog.Debugf("TUN interface index: %d", r.ifIndex)
 
 	prefix, err := netip.ParsePrefix(tunAddr)
 	if err != nil {
 		return fmt.Errorf("invalid TUN address: %w", err)
 	}
 	ip := prefix.Addr().String()
+	ifStr := strconv.Itoa(r.ifIndex)
 
 	// Get the current default gateway.
 	gw, err := r.getDefaultGateway()
@@ -45,15 +59,15 @@ func (r *windowsRouteManager) addRoutes(tunName, tunAddr, serverIP, dnsIP string
 		return fmt.Errorf("failed to add server route: %w", err)
 	}
 
-	// Use two /1 routes to capture all traffic without replacing the default route.
-	if err := runWin("route", "add", "0.0.0.0", "mask", "128.0.0.0", ip, "metric", "5"); err != nil {
+	// Use two /1 routes to capture all traffic, specifying the TUN interface index.
+	if err := runWin("route", "add", "0.0.0.0", "mask", "128.0.0.0", ip, "metric", "5", "IF", ifStr); err != nil {
 		return fmt.Errorf("failed to add 0.0.0.0/1 route: %w", err)
 	}
-	if err := runWin("route", "add", "128.0.0.0", "mask", "128.0.0.0", ip, "metric", "5"); err != nil {
+	if err := runWin("route", "add", "128.0.0.0", "mask", "128.0.0.0", ip, "metric", "5", "IF", ifStr); err != nil {
 		return fmt.Errorf("failed to add 128.0.0.0/1 route: %w", err)
 	}
 
-	flog.Infof("TUN route: default route via %s (%s), server %s via %s", ip, tunName, serverIP, gw)
+	flog.Infof("TUN route: default route via %s (%s, IF %d), server %s via %s", ip, tunName, r.ifIndex, serverIP, gw)
 	return nil
 }
 
