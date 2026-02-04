@@ -299,6 +299,9 @@ jobs:
         strategy:
             matrix:
                 arch: [amd64, arm64]
+        env:
+            REGISTRY: ghcr.io
+            IMAGE_NAME: ${{ github.repository }}
         steps:
             - name: Checkout Code
               uses: actions/checkout@v5
@@ -314,6 +317,10 @@ jobs:
                     echo "No tag detected. Using commit hash: $REF_ID"
                   fi
                   echo "ref=$REF_ID" >> $GITHUB_OUTPUT
+                  # Lowercase the image name for GHCR
+                  echo "image_name=${IMAGE_NAME,,}" >> $GITHUB_OUTPUT
+              env:
+                  IMAGE_NAME: ${{ github.repository }}
 
             - name: Download nopcap binary
               uses: actions/download-artifact@v4
@@ -345,8 +352,8 @@ jobs:
                   build-args: |
                       TARGETARCH=${{ matrix.arch }}
                   tags: |
-                      ghcr.io/${{ github.repository }}:mikrotik-${{ matrix.arch }}
-                      ghcr.io/${{ github.repository }}:mikrotik-${{ matrix.arch }}-${{ steps.ref_id.outputs.ref }}
+                      ghcr.io/${{ steps.ref_id.outputs.image_name }}:mikrotik-${{ matrix.arch }}
+                      ghcr.io/${{ steps.ref_id.outputs.image_name }}:mikrotik-${{ matrix.arch }}-${{ steps.ref_id.outputs.ref }}
 
     release:
         runs-on: ubuntu-latest
