@@ -8,16 +8,24 @@ import (
 	"paqet/internal/pkg/hash"
 	"paqet/internal/tnet"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// udpSession tracks an active UDP forwarding session with its own write channel.
-type udpSession struct {
+// udpStream represents a single stream in the pool.
+type udpStream struct {
 	strm    tnet.Strm
 	key     uint64
-	writeCh chan []byte // buffered channel for outgoing packets
-	cancel  context.CancelFunc
-	dropped uint64 // count of dropped packets due to buffer full
+	writeCh chan []byte
+}
+
+// udpSession tracks an active UDP forwarding session with multiple parallel streams.
+type udpSession struct {
+	streams    []*udpStream // slice of parallel streams (size = f.streams)
+	numStreams int          // number of streams in this session
+	nextIdx    uint64       // atomic counter for round-robin
+	cancel     context.CancelFunc
+	dropped    uint64 // count of dropped packets due to buffer full
 }
 
 func (f *Forward) listenUDP(ctx context.Context) {
@@ -42,7 +50,8 @@ func (f *Forward) listenUDP(ctx context.Context) {
 		conn.Close()
 	}()
 
-	flog.Infof("UDP forwarder listening on %s -> %s", laddr, f.targetAddr)
+	streamCount := f.streams
+	flog.Infof("UDP forwarder listening on %s -> %s (%d parallel streams)", laddr, f.targetAddr, streamCount)
 
 	// Track sessions per client address
 	var sessions sync.Map // uint64 -> *udpSession
@@ -72,92 +81,104 @@ func (f *Forward) listenUDP(ctx context.Context) {
 		// Check for existing session
 		if v, ok := sessions.Load(key); ok {
 			sess := v.(*udpSession)
-			// Non-blocking send to write channel
 			pkt := make([]byte, n)
 			copy(pkt, buf[:n])
 			buffer.UPool.Put(bufp)
 
+			// Round-robin across streams for parallelism
+			idx := atomic.AddUint64(&sess.nextIdx, 1) % uint64(sess.numStreams)
+			stream := sess.streams[idx]
+
 			select {
-			case sess.writeCh <- pkt:
+			case stream.writeCh <- pkt:
 				// Packet queued successfully
 			default:
 				// Channel full, drop packet (back-pressure)
 				sess.dropped++
-				if sess.dropped%100 == 1 {
-					flog.Debugf("UDP forward: dropped %d packets for %s (buffer full, queue len: %d)", sess.dropped, caddr, len(sess.writeCh))
+				if sess.dropped%1000 == 1 {
+					flog.Debugf("UDP forward: dropped %d packets for %s (buffer full)", sess.dropped, caddr)
 				}
 			}
 			continue
 		}
 
-		// New session - establish stream
-		strm, isNew, strmKey, err := f.client.UDP(caddr.String(), f.targetAddr)
-		if err != nil {
-			buffer.UPool.Put(bufp)
-			flog.Errorf("failed to establish UDP stream for %s -> %s: %v", caddr, f.targetAddr, err)
-			continue
-		}
-
-		if !isNew {
-			// Stream exists but session doesn't - race condition recovery
-			// Write first packet directly with length prefix
-			if err := buffer.WriteUDPFrame(strm, buf[:n]); err != nil {
-				buffer.UPool.Put(bufp)
-				flog.Errorf("failed to forward %d bytes from %s -> %s: %v", n, caddr, f.targetAddr, err)
-				f.client.CloseUDP(strmKey)
-				continue
-			}
-			buffer.UPool.Put(bufp)
-			continue
-		}
-
-		// Create new session with buffered write channel
-		// Large buffer (4096) for high-throughput scenarios like WireGuard
+		// New session - establish multiple streams for parallelism
 		sessCtx, sessCancel := context.WithCancel(ctx)
 		sess := &udpSession{
-			strm:    strm,
-			key:     strmKey,
-			writeCh: make(chan []byte, 4096), // buffer up to 4096 packets for high throughput
-			cancel:  sessCancel,
+			streams:    make([]*udpStream, streamCount),
+			numStreams: streamCount,
+			cancel:     sessCancel,
+		}
+
+		// Calculate per-stream buffer size (total ~4096 packets across all streams)
+		perStreamBuffer := 4096 / streamCount
+		if perStreamBuffer < 64 {
+			perStreamBuffer = 64
+		}
+
+		// Create multiple parallel streams using UDPNew (no caching)
+		success := true
+		for i := 0; i < streamCount; i++ {
+			strm, strmKey, err := f.client.UDPNew(f.targetAddr)
+			if err != nil {
+				flog.Errorf("failed to establish UDP stream %d for %s -> %s: %v", i, caddr, f.targetAddr, err)
+				// Close already created streams
+				for j := 0; j < i; j++ {
+					f.client.CloseUDPStream(sess.streams[j].strm)
+				}
+				sessCancel()
+				buffer.UPool.Put(bufp)
+				success = false
+				break
+			}
+
+			sess.streams[i] = &udpStream{
+				strm:    strm,
+				key:     strmKey,
+				writeCh: make(chan []byte, perStreamBuffer),
+			}
+		}
+		if !success {
+			continue
 		}
 
 		// Store session before sending first packet
 		sessions.Store(key, sess)
 
-		// Send first packet
+		// Send first packet to stream 0
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
 		buffer.UPool.Put(bufp)
-		sess.writeCh <- pkt
+		sess.streams[0].writeCh <- pkt
 
-		flog.Infof("accepted UDP connection %d for %s -> %s", strm.SID(), caddr, f.targetAddr)
+		flog.Infof("accepted UDP session for %s -> %s (%d parallel streams)", caddr, f.targetAddr, streamCount)
 
-		// Start writer goroutine (local -> stream)
-		go f.udpWriteLoop(sessCtx, sess)
-
-		// Start reader goroutine (stream -> local)
-		go f.udpReadLoop(sessCtx, sess, conn, caddr, key, &sessions)
+		// Start writer and reader goroutines for each stream
+		for i := 0; i < streamCount; i++ {
+			stream := sess.streams[i]
+			go f.udpWriteLoop(sessCtx, stream)
+			go f.udpReadLoop(sessCtx, sess, stream, conn, caddr, key, &sessions, i)
+		}
 	}
 }
 
 // udpWriteLoop reads packets from the write channel and sends them to the stream.
 // Uses length-prefixed framing to preserve UDP datagram boundaries.
 // Optimized to drain multiple packets per iteration for high throughput.
-func (f *Forward) udpWriteLoop(ctx context.Context, sess *udpSession) {
+func (f *Forward) udpWriteLoop(ctx context.Context, stream *udpStream) {
 	var pktsWritten uint64
 	for {
 		select {
 		case <-ctx.Done():
-			flog.Debugf("UDP stream %d writer stopping, wrote %d packets", sess.strm.SID(), pktsWritten)
+			flog.Debugf("UDP stream %d writer stopping, wrote %d packets", stream.strm.SID(), pktsWritten)
 			return
-		case pkt := <-sess.writeCh:
+		case pkt := <-stream.writeCh:
 			// Set deadline once for this batch
-			sess.strm.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			stream.strm.SetWriteDeadline(time.Now().Add(10 * time.Second))
 
 			// Write first packet
-			if err := buffer.WriteUDPFrame(sess.strm, pkt); err != nil {
-				flog.Debugf("UDP stream %d write error after %d packets: %v", sess.strm.SID(), pktsWritten, err)
-				sess.cancel()
+			if err := buffer.WriteUDPFrame(stream.strm, pkt); err != nil {
+				flog.Debugf("UDP stream %d write error after %d packets: %v", stream.strm.SID(), pktsWritten, err)
 				return
 			}
 			pktsWritten++
@@ -166,10 +187,9 @@ func (f *Forward) udpWriteLoop(ctx context.Context, sess *udpSession) {
 			drain := true
 			for drain {
 				select {
-				case pkt = <-sess.writeCh:
-					if err := buffer.WriteUDPFrame(sess.strm, pkt); err != nil {
-						flog.Debugf("UDP stream %d write error after %d packets: %v", sess.strm.SID(), pktsWritten, err)
-						sess.cancel()
+				case pkt = <-stream.writeCh:
+					if err := buffer.WriteUDPFrame(stream.strm, pkt); err != nil {
+						flog.Debugf("UDP stream %d write error after %d packets: %v", stream.strm.SID(), pktsWritten, err)
 						return
 					}
 					pktsWritten++
@@ -178,23 +198,31 @@ func (f *Forward) udpWriteLoop(ctx context.Context, sess *udpSession) {
 				}
 			}
 
-			sess.strm.SetWriteDeadline(time.Time{})
+			stream.strm.SetWriteDeadline(time.Time{})
 		}
 	}
 }
 
 // udpReadLoop reads from the stream and writes back to the local UDP client.
 // Uses length-prefixed framing to preserve UDP datagram boundaries.
-func (f *Forward) udpReadLoop(ctx context.Context, sess *udpSession, conn *net.UDPConn, caddr *net.UDPAddr, key uint64, sessions *sync.Map) {
+func (f *Forward) udpReadLoop(ctx context.Context, sess *udpSession, stream *udpStream, conn *net.UDPConn, caddr *net.UDPAddr, key uint64, sessions *sync.Map, streamIdx int) {
 	bufp := buffer.UPool.Get().(*[]byte)
 	var pktsRead uint64
 	defer func() {
 		buffer.UPool.Put(bufp)
-		sessions.Delete(key)
-		f.client.CloseUDP(sess.key)
-		sess.cancel()
-		flog.Debugf("closing UDP session stream %d", sess.strm.SID())
-		flog.Debugf("UDP stream %d closed for %s -> %s (read %d packets)", sess.strm.SID(), caddr, f.targetAddr, pktsRead)
+		// Only stream 0 cleans up the session
+		if streamIdx == 0 {
+			sessions.Delete(key)
+			sess.cancel()
+			// Close all streams
+			for i := 0; i < sess.numStreams; i++ {
+				if sess.streams[i] != nil {
+					f.client.CloseUDPStream(sess.streams[i].strm)
+				}
+			}
+			flog.Debugf("UDP session closed for %s -> %s", caddr, f.targetAddr)
+		}
+		flog.Debugf("UDP stream %d closed (read %d packets)", stream.strm.SID(), pktsRead)
 	}()
 	buf := *bufp
 
@@ -206,10 +234,10 @@ func (f *Forward) udpReadLoop(ctx context.Context, sess *udpSession, conn *net.U
 		}
 
 		// 60s timeout for WireGuard keepalives (default 25s interval)
-		sess.strm.SetReadDeadline(time.Now().Add(60 * time.Second))
-		n, err := buffer.ReadUDPFrame(sess.strm, buf)
+		stream.strm.SetReadDeadline(time.Now().Add(60 * time.Second))
+		n, err := buffer.ReadUDPFrame(stream.strm, buf)
 		if err != nil {
-			flog.Debugf("UDP stream %d read error for %s after %d packets: %v", sess.strm.SID(), caddr, pktsRead, err)
+			flog.Debugf("UDP stream %d read error after %d packets: %v", stream.strm.SID(), pktsRead, err)
 			return
 		}
 		pktsRead++

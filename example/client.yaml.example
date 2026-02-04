@@ -20,9 +20,10 @@ socks5:
 
 # Alternative: Port forwarding configuration (instead of SOCKS5)
 # forward:
-#   - listen: "127.0.0.1:8080"  # Local port to listen on  
+#   - listen: "127.0.0.1:8080"  # Local port to listen on
 #     target: "127.0.0.1:80"    # Target to forward to (via server)
 #     protocol: "tcp"           # Protocol (tcp/udp)
+#     streams: 8                # UDP only: parallel streams for throughput (1-64, default: 8)
 
 # TUN mode (full system VPN - routes all traffic through tunnel)
 # Requires root/administrator privileges
@@ -97,7 +98,7 @@ transport:
     # nodelay: 1              # 0=disable, 1=enable
                               # Enable for lower latency & aggressive retransmission
                               # Disable for TCP-like conservative behavior
-                  
+
     # interval: 10            # Internal update timer interval in milliseconds (10-5000ms)
                               # Lower values increase responsiveness but raise CPU usage
 

@@ -12,14 +12,19 @@ type Forward struct {
 	client     *client.Client
 	listenAddr string
 	targetAddr string
+	streams    int // Number of parallel streams for UDP forwarding
 	wg         sync.WaitGroup
 }
 
-func New(client *client.Client, listenAddr, targetAddr string) (*Forward, error) {
+func New(client *client.Client, listenAddr, targetAddr string, streams int) (*Forward, error) {
+	if streams < 1 {
+		streams = 8 // default
+	}
 	return &Forward{
 		client:     client,
 		listenAddr: listenAddr,
 		targetAddr: targetAddr,
+		streams:    streams,
 	}, nil
 }
 
