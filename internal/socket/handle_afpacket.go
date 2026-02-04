@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"paqet/internal/conf"
 	"paqet/internal/flog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gopacket/gopacket"
@@ -17,18 +19,53 @@ const (
 	afpacketBlockSize = 512 * 1024 // 512KB per block
 )
 
-// afpacketHandle wraps an afpacket.TPacket to implement RawHandle interface.
+// sharedAfpacketHandle is a shared AF_PACKET handle with reference counting.
+// Multiple connections share the same underlying TPacket to avoid memory-mapped
+// buffer conflicts in container environments like MikroTik.
+type sharedAfpacketHandle struct {
+	tpacket  *afpacket.TPacket
+	srcMAC   []byte
+	refCount int32
+}
+
+var (
+	sharedHandles   = make(map[string]*sharedAfpacketHandle) // interface name -> shared handle
+	sharedHandlesMu sync.Mutex
+)
+
+// afpacketHandle wraps a shared AF_PACKET handle to implement RawHandle interface.
 type afpacketHandle struct {
-	tpacket   *afpacket.TPacket
+	shared    *sharedAfpacketHandle
+	ifaceName string
 	direction Direction
-	srcMAC    []byte // Source MAC for direction filtering
 }
 
 // newAfpacketHandle creates a new RawHandle using AF_PACKET on Linux.
 // AF_PACKET is a Linux-only socket type that provides raw network access
 // without requiring libpcap, making it suitable for minimal containers.
+//
+// Handles are shared per interface to avoid memory-mapped buffer conflicts
+// when multiple connections use the same interface.
 func newAfpacketHandle(cfg *conf.Network) (RawHandle, error) {
-	// Calculate number of blocks from sockbuf size
+	sharedHandlesMu.Lock()
+	defer sharedHandlesMu.Unlock()
+
+	ifaceName := cfg.Interface.Name
+
+	// Check if we already have a shared handle for this interface
+	shared, exists := sharedHandles[ifaceName]
+	if exists {
+		atomic.AddInt32(&shared.refCount, 1)
+		flog.Debugf("AF_PACKET: reusing shared handle on %s (refCount=%d)", ifaceName, atomic.LoadInt32(&shared.refCount))
+
+		return &afpacketHandle{
+			shared:    shared,
+			ifaceName: ifaceName,
+			direction: DirectionInOut,
+		}, nil
+	}
+
+	// Create new shared handle
 	numBlocks := cfg.PCAP.Sockbuf / afpacketBlockSize
 	if numBlocks < 2 {
 		numBlocks = 2
@@ -38,7 +75,7 @@ func newAfpacketHandle(cfg *conf.Network) (RawHandle, error) {
 	}
 
 	tpacket, err := afpacket.NewTPacket(
-		afpacket.OptInterface(cfg.Interface.Name),
+		afpacket.OptInterface(ifaceName),
 		afpacket.OptFrameSize(afpacketFrameSize),
 		afpacket.OptBlockSize(afpacketBlockSize),
 		afpacket.OptNumBlocks(numBlocks),
@@ -46,31 +83,39 @@ func newAfpacketHandle(cfg *conf.Network) (RawHandle, error) {
 		afpacket.TPacketVersion2,                   // Use v2 for better compatibility (v3 can crash in containers)
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create AF_PACKET handle on %s: %v", cfg.Interface.Name, err)
+		return nil, fmt.Errorf("failed to create AF_PACKET handle on %s: %v", ifaceName, err)
 	}
 
-	flog.Debugf("AF_PACKET handle created on %s with %d blocks (%d MB buffer)",
-		cfg.Interface.Name, numBlocks, (numBlocks*afpacketBlockSize)/(1024*1024))
+	shared = &sharedAfpacketHandle{
+		tpacket:  tpacket,
+		srcMAC:   cfg.Interface.HardwareAddr,
+		refCount: 1,
+	}
+	sharedHandles[ifaceName] = shared
+
+	flog.Infof("AF_PACKET: created shared handle on %s with %d blocks (%d MB buffer)",
+		ifaceName, numBlocks, (numBlocks*afpacketBlockSize)/(1024*1024))
 
 	return &afpacketHandle{
-		tpacket:   tpacket,
+		shared:    shared,
+		ifaceName: ifaceName,
 		direction: DirectionInOut,
-		srcMAC:    cfg.Interface.HardwareAddr,
 	}, nil
 }
 
 func (h *afpacketHandle) ZeroCopyReadPacketData() ([]byte, gopacket.CaptureInfo, error) {
 	for {
-		data, ci, err := h.tpacket.ZeroCopyReadPacketData()
+		data, ci, err := h.shared.tpacket.ZeroCopyReadPacketData()
 		if err != nil {
 			return nil, ci, err
 		}
 
 		// AF_PACKET doesn't have native direction filtering like pcap.
 		// We implement it by checking the source MAC address.
-		if h.direction != DirectionInOut && len(data) >= 14 && len(h.srcMAC) == 6 {
-			srcMAC := data[6:12]
-			isOutgoing := macEqual(srcMAC, h.srcMAC)
+		srcMAC := h.shared.srcMAC
+		if h.direction != DirectionInOut && len(data) >= 14 && len(srcMAC) == 6 {
+			pktSrcMAC := data[6:12]
+			isOutgoing := macEqual(pktSrcMAC, srcMAC)
 
 			if h.direction == DirectionIn && isOutgoing {
 				// Want incoming only, but this is outgoing - skip
@@ -87,7 +132,7 @@ func (h *afpacketHandle) ZeroCopyReadPacketData() ([]byte, gopacket.CaptureInfo,
 }
 
 func (h *afpacketHandle) WritePacketData(data []byte) error {
-	return h.tpacket.WritePacketData(data)
+	return h.shared.tpacket.WritePacketData(data)
 }
 
 func (h *afpacketHandle) SetBPFFilter(filter string) error {
@@ -97,7 +142,7 @@ func (h *afpacketHandle) SetBPFFilter(filter string) error {
 		return fmt.Errorf("failed to compile BPF filter: %v", err)
 	}
 
-	return h.tpacket.SetBPF(rawBPF)
+	return h.shared.tpacket.SetBPF(rawBPF)
 }
 
 func (h *afpacketHandle) SetDirection(dir Direction) error {
@@ -108,9 +153,24 @@ func (h *afpacketHandle) SetDirection(dir Direction) error {
 }
 
 func (h *afpacketHandle) Close() {
-	if h.tpacket != nil {
-		h.tpacket.Close()
+	sharedHandlesMu.Lock()
+	defer sharedHandlesMu.Unlock()
+
+	if h.shared == nil {
+		return
 	}
+
+	newCount := atomic.AddInt32(&h.shared.refCount, -1)
+	flog.Debugf("AF_PACKET: releasing handle on %s (refCount=%d)", h.ifaceName, newCount)
+
+	if newCount <= 0 {
+		// Last reference - actually close the TPacket
+		flog.Infof("AF_PACKET: closing shared handle on %s", h.ifaceName)
+		h.shared.tpacket.Close()
+		delete(sharedHandles, h.ifaceName)
+	}
+
+	h.shared = nil
 }
 
 // macEqual compares two MAC addresses for equality.

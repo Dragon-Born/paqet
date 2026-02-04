@@ -3,9 +3,13 @@
 # This config is designed for running paqet in a MikroTik container.
 # The container uses AF_PACKET backend (no libpcap required).
 #
+# IMPORTANT: For MikroTik containers, use conn: 1 (single connection).
+# Multiple connections with AF_PACKET in containers can cause instability.
+# Single connection with KCP/QUIC multiplexing provides excellent throughput.
+#
 # Available container images (architecture-specific):
-#   - ghcr.io/YOUR_ORG/paqet:mikrotik-arm64  (for ARM64 devices like hAP ax3, RB5009)
-#   - ghcr.io/YOUR_ORG/paqet:mikrotik-amd64  (for x86 devices like CHR, RB1100AHx4)
+#   - ghcr.io/dragon-born/paqet:mikrotik-arm64  (for ARM64 devices like hAP ax3, RB5009)
+#   - ghcr.io/dragon-born/paqet:mikrotik-amd64  (for x86 devices like CHR, RB1100AHx4)
 #
 # MikroTik Setup:
 #   1. Enable container mode: /system/device-mode/update container=yes
@@ -16,43 +20,53 @@
 #   6. Add NAT: /ip/firewall/nat/add chain=srcnat action=masquerade src-address=172.17.0.0/24
 #   7. Create container mount for config: /container/mounts/add name=paqet-config src=disk1/paqet dst=/config
 #   8. Add container (use correct arch for your device):
-#      /container/add remote-image=ghcr.io/YOUR_ORG/paqet:mikrotik-arm64 \
+#      /container/add remote-image=ghcr.io/dragon-born/paqet:mikrotik-arm64 \
 #        interface=veth-paqet root-dir=disk1/containers/paqet \
 #        mounts=paqet-config start-on-boot=yes logging=yes
 
 role: "client"
 
+log:
+  level: "info"
+
+socks5:
+  - listen: "0.0.0.0:1080"
+
 network:
-  # Use the veth interface name as seen inside the container
   # MikroTik veth interfaces appear as eth0 inside the container
   interface: "eth0"
 
-  # Port for raw TCP packet communication
-  port: 44443
-
   pcap:
-    # AF_PACKET is the only backend in nopcap builds
-    backend: "afpacket"
-    sockbuf: 4194304  # 4MB buffer
+    backend: "afpacket"   # Required for nopcap build
+    sockbuf: 4194304      # 4MB buffer
 
-transport:
-  protocol: "kcp"
-
-  kcp:
-    preset: "fast3"
-
-  connection:
-    count: 2
-    timeout: 30s
+  tcp:
+    local_flag: ["PA"]
+    remote_flag: ["PA"]
 
 server:
-  # Your paqet server address
-  address: "your-server.example.com:44443"
-  secret: "your-32-byte-secret-key-here!!!"
+  addr: "your-server.example.com:8443"
 
-socks5:
-  # SOCKS5 proxy listening address (accessible from MikroTik LAN)
-  listen: "0.0.0.0:1080"
+transport:
+  protocol: "auto"        # Auto-select best protocol (KCP, QUIC, or UDP)
+  conn: 1                 # MUST be 1 for MikroTik containers (see note above)
 
-log:
-  level: "info"
+  kcp:
+    mode: "fast"
+    nodelay: 1
+    interval: 10
+    resend: 2
+    nocongestion: 0
+    mtu: 1400
+    dshard: 10
+    pshard: 3
+    rcvwnd: 4096
+    sndwnd: 4096
+    block: "aes"
+    key: "your-32-byte-hex-key-here"
+
+  quic:
+    key: "your-32-byte-hex-key-here"
+    alpn: "h3"
+    max_streams: 1024
+    idle_timeout: "60s"
