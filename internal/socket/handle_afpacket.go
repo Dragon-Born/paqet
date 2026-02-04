@@ -153,24 +153,18 @@ func (h *afpacketHandle) SetDirection(dir Direction) error {
 }
 
 func (h *afpacketHandle) Close() {
-	sharedHandlesMu.Lock()
-	defer sharedHandlesMu.Unlock()
-
 	if h.shared == nil {
 		return
 	}
 
+	// Don't actually close the shared TPacket or nil out h.shared - it's shared
+	// across multiple goroutines (probes, connections, read loops). Other goroutines
+	// may still be reading from this handle even after Close() is called.
+	// The TPacket lives for the program's lifetime.
+	//
+	// We still track refCount for debugging purposes.
 	newCount := atomic.AddInt32(&h.shared.refCount, -1)
 	flog.Debugf("AF_PACKET: releasing handle on %s (refCount=%d)", h.ifaceName, newCount)
-
-	if newCount <= 0 {
-		// Last reference - actually close the TPacket
-		flog.Infof("AF_PACKET: closing shared handle on %s", h.ifaceName)
-		h.shared.tpacket.Close()
-		delete(sharedHandles, h.ifaceName)
-	}
-
-	h.shared = nil
 }
 
 // macEqual compares two MAC addresses for equality.
