@@ -20,3 +20,15 @@ func (p *udpPool) delete(key uint64) error {
 	}
 	return nil
 }
+
+// invalidateAll closes and removes all streams in the pool.
+func (p *udpPool) invalidateAll() {
+	p.strms.Range(func(key, value interface{}) bool {
+		if strm, ok := value.(tnet.Strm); ok {
+			flog.Debugf("invalidating UDP stream %d", strm.SID())
+			strm.Close()
+		}
+		p.strms.Delete(key)
+		return true
+	})
+}

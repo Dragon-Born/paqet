@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"paqet/internal/conf"
 	"paqet/internal/tnet"
 )
@@ -145,31 +146,106 @@ func unpackTCPF(b [2]byte) conf.TCPF {
 	}
 }
 
+// Address type constants for binary encoding
+const (
+	addrTypeIPv4     byte = 0x01
+	addrTypeIPv6     byte = 0x02
+	addrTypeHostname byte = 0x03
+)
+
+// readAddr reads address using binary encoding.
+// Wire format: type(1) + address(variable) + port(2)
+//   - IPv4: type(0x01) + ip(4) + port(2) = 7 bytes
+//   - IPv6: type(0x02) + ip(16) + port(2) = 19 bytes
+//   - Hostname: type(0x03) + len(1) + hostname(len) + port(2)
 func (p *Proto) readAddr(r io.Reader) error {
-	var addrLen uint16
-	if err := binary.Read(r, binary.BigEndian, &addrLen); err != nil {
+	var typeBuf [1]byte
+	if _, err := io.ReadFull(r, typeBuf[:]); err != nil {
 		return err
 	}
-	buf := make([]byte, addrLen)
-	if _, err := io.ReadFull(r, buf); err != nil {
+
+	var host string
+	switch typeBuf[0] {
+	case addrTypeIPv4:
+		ipBuf := make([]byte, 4)
+		if _, err := io.ReadFull(r, ipBuf); err != nil {
+			return err
+		}
+		host = net.IP(ipBuf).String()
+	case addrTypeIPv6:
+		ipBuf := make([]byte, 16)
+		if _, err := io.ReadFull(r, ipBuf); err != nil {
+			return err
+		}
+		host = net.IP(ipBuf).String()
+	case addrTypeHostname:
+		var lenBuf [1]byte
+		if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+			return err
+		}
+		hostBuf := make([]byte, lenBuf[0])
+		if _, err := io.ReadFull(r, hostBuf); err != nil {
+			return err
+		}
+		host = string(hostBuf)
+	default:
+		return errors.New("unknown address type")
+	}
+
+	var portBuf [2]byte
+	if _, err := io.ReadFull(r, portBuf[:]); err != nil {
 		return err
 	}
-	addr, err := tnet.NewAddr(string(buf))
-	if err != nil {
-		return err
-	}
-	p.Addr = addr
+	port := int(binary.BigEndian.Uint16(portBuf[:]))
+
+	p.Addr = &tnet.Addr{Host: host, Port: port}
 	return nil
 }
 
+// writeAddr writes address using binary encoding.
+// Saves ~60% bandwidth vs text encoding for IPv4 addresses.
 func (p *Proto) writeAddr(w io.Writer) error {
 	if p.Addr == nil {
 		return ErrNilAddr
 	}
-	addrStr := p.Addr.String()
-	if err := binary.Write(w, binary.BigEndian, uint16(len(addrStr))); err != nil {
-		return err
+
+	// Try parsing as IP address first
+	ip := net.ParseIP(p.Addr.Host)
+	if ip != nil {
+		if ip4 := ip.To4(); ip4 != nil {
+			// IPv4: 7 bytes total
+			if _, err := w.Write([]byte{addrTypeIPv4}); err != nil {
+				return err
+			}
+			if _, err := w.Write(ip4); err != nil {
+				return err
+			}
+		} else {
+			// IPv6: 19 bytes total
+			if _, err := w.Write([]byte{addrTypeIPv6}); err != nil {
+				return err
+			}
+			if _, err := w.Write(ip.To16()); err != nil {
+				return err
+			}
+		}
+	} else {
+		// Hostname: variable length
+		hostBytes := []byte(p.Addr.Host)
+		if len(hostBytes) > 255 {
+			return errors.New("hostname too long")
+		}
+		if _, err := w.Write([]byte{addrTypeHostname, byte(len(hostBytes))}); err != nil {
+			return err
+		}
+		if _, err := w.Write(hostBytes); err != nil {
+			return err
+		}
 	}
-	_, err := w.Write([]byte(addrStr))
+
+	// Write port (2 bytes)
+	portBuf := [2]byte{}
+	binary.BigEndian.PutUint16(portBuf[:], uint16(p.Addr.Port))
+	_, err := w.Write(portBuf[:])
 	return err
 }

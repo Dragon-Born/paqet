@@ -50,6 +50,7 @@ func (c *Client) Start(ctx context.Context) error {
 		c.iter.Items = append(c.iter.Items, tc)
 	}
 	go c.ticker(ctx)
+	go c.startNetworkMonitor(ctx)
 
 	go func() {
 		<-ctx.Done()

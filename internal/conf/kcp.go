@@ -31,27 +31,24 @@ type KCP struct {
 	Block kcp.BlockCrypt `yaml:"-"`
 }
 
-func (k *KCP) setDefaults(role string) {
+func (k *KCP) setDefaults(_ string) {
 	if k.Mode == "" {
 		k.Mode = "fast3"
 	}
 	if k.MTU == 0 {
-		k.MTU = 1350
+		// MTU calculation for raw TCP packets:
+		// Ethernet MTU (1500) - IP header (20 IPv4 / 40 IPv6) - TCP header+opts (32)
+		// IPv4: 1500 - 20 - 32 = 1448
+		// IPv6: 1500 - 40 - 32 = 1428
+		// Using 1400 as safe default that works for both, with margin for edge cases
+		k.MTU = 1400
 	}
 
 	if k.Rcvwnd == 0 {
-		if role == "server" {
-			k.Rcvwnd = 1024
-		} else {
-			k.Rcvwnd = 512
-		}
+		k.Rcvwnd = 2048 // ~55 Mbps at 50ms RTT with 1350 MTU
 	}
 	if k.Sndwnd == 0 {
-		if role == "server" {
-			k.Sndwnd = 1024
-		} else {
-			k.Sndwnd = 512
-		}
+		k.Sndwnd = 2048
 	}
 
 	// if k.Dshard == 0 {
@@ -66,10 +63,10 @@ func (k *KCP) setDefaults(role string) {
 	}
 
 	if k.Smuxbuf == 0 {
-		k.Smuxbuf = 4 * 1024 * 1024
+		k.Smuxbuf = 8 * 1024 * 1024 // 8 MB session buffer
 	}
 	if k.Streambuf == 0 {
-		k.Streambuf = 2 * 1024 * 1024
+		k.Streambuf = 4 * 1024 * 1024 // 4 MB per-stream buffer
 	}
 }
 

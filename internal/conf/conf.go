@@ -62,6 +62,37 @@ func (c *Conf) setDefaults() {
 	c.Network.setDefaults(c.Role)
 	c.Server.setDefaults()
 	c.Transport.setDefaults(c.Role)
+
+	// Optimize MTU based on configured IP version if not explicitly set
+	c.optimizeMTU()
+}
+
+// optimizeMTU adjusts the KCP MTU based on which IP version is configured.
+// This allows using the maximum possible payload for the raw TCP packets.
+func (c *Conf) optimizeMTU() {
+	if c.Transport.KCP == nil {
+		return
+	}
+
+	// Only optimize if MTU is at the default value (not user-specified)
+	// Default is 1400, which is safe for both IPv4 and IPv6
+	if c.Transport.KCP.MTU != 1400 {
+		return
+	}
+
+	// MTU calculation: Ethernet(1500) - IP header - TCP header+timestamps(32)
+	// IPv4: 1500 - 20 - 32 = 1448
+	// IPv6: 1500 - 40 - 32 = 1428
+	ipv4Only := c.Network.IPv4.Addr_ != "" && c.Network.IPv6.Addr_ == ""
+	ipv6Only := c.Network.IPv6.Addr_ != "" && c.Network.IPv4.Addr_ == ""
+
+	if ipv4Only {
+		c.Transport.KCP.MTU = 1440 // Leave 8 bytes margin for safety
+		flog.Debugf("optimized KCP MTU to %d for IPv4-only config", c.Transport.KCP.MTU)
+	} else if ipv6Only {
+		c.Transport.KCP.MTU = 1420 // Leave 8 bytes margin for safety
+		flog.Debugf("optimized KCP MTU to %d for IPv6-only config", c.Transport.KCP.MTU)
+	}
 }
 
 func (c *Conf) validate() error {

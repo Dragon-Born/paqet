@@ -1,4 +1,10 @@
 # paqet Client Configuration Example
+#
+# Features:
+# - Network auto-detection: Use `network: {}` to auto-detect interface, IP, and gateway MAC
+# - Auto-reconnect: Client automatically reconnects on network changes (WiFi switch, sleep/wake)
+# - Health checks: Connections are tested every 30 seconds
+#
 # Role must be explicitly set
 role: "client"
 
@@ -23,11 +29,31 @@ socks5:
 # tun:
 #   name: "paqet0"           # TUN device name (default: "utun" on macOS, "paqet0" on Linux/Windows)
 #   addr: "10.0.85.1/24"     # TUN interface address (CIDR)
-#   mtu: 1400                # MTU (default: 1400)
+#   mtu: 1400                # TUN MTU (default: 1400, smaller than Ethernet to avoid fragmentation)
 #   dns: "8.8.8.8"           # DNS server
 #   auto_route: true         # Auto-configure system routes
 
 # Network interface settings
+#
+# AUTO-DETECTION: Use `network: {}` to auto-detect all settings.
+# paqet will detect interface, local IP, and gateway MAC automatically.
+# This works on macOS, Linux, and Windows.
+#
+# Minimal config example with auto-detection:
+#   role: "client"
+#   network: {}
+#   server:
+#     addr: "10.0.0.100:9999"
+#   transport:
+#     protocol: "kcp"
+#     kcp:
+#       key: "your-secret-key-here"
+#
+# You can also partially specify settings - missing fields are auto-detected:
+#   network:
+#     interface: "en0"    # Manually set interface
+#     ipv4:               # IP and MAC will be auto-detected
+#
 network:
   interface: "en0"                          # CHANGE ME: Network interface (en0, eth0, wlan0, etc.)
   # guid: "\Device\NPF_{...}"               # Windows only (Npcap).
@@ -61,7 +87,7 @@ transport:
                    # and selects the one with lowest RTT.
                    # Requires at least 2 protocol sections configured.
                    # Server must also use "auto" to accept all protocols.
-  conn: 1          # Number of connections (1-256, default: 1)
+  conn: 4          # Number of connections (1-256, default: 4, power-of-2 recommended)
 
   # KCP protocol settings
   kcp:
@@ -94,17 +120,25 @@ transport:
                               # false = batch ACKs (more bandwidth efficient)
                               # Setting true reduces latency but increases bandwidth usage
 
-    # mtu: 1350              # Maximum transmission unit (50-1500)
-    # rcvwnd: 512            # Receive window size (default for client)  
-    # sndwnd: 512            # Send window size (default for client)
+    # MTU calculation: Ethernet(1500) - IP header - TCP header+opts(32)
+    #   IPv4: 1500 - 20 - 32 = 1448 (auto-optimized to 1440)
+    #   IPv6: 1500 - 40 - 32 = 1428 (auto-optimized to 1420)
+    #   Default 1400 is safe for dual-stack; auto-optimized if single IP version
+    # mtu: 1400
+
+    # Window sizes control max throughput: throughput = (window * MTU) / RTT
+    #   2048 windows @ 1400 MTU @ 50ms RTT = ~56 Mbps
+    #   4096 windows @ 1400 MTU @ 50ms RTT = ~112 Mbps
+    # rcvwnd: 2048           # Receive window size (default: 2048)
+    # sndwnd: 2048           # Send window size (default: 2048)
 
     # Encryption settings
     # block: "aes"                    # Encryption: aes, aes-128, aes-128-gcm, aes-192, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none.
     key: "your-secret-key-here"       # CHANGE ME: Secret key (must match server)
 
-    # Buffer settings (optional)
-    # smuxbuf: 4194304       # 4MB SMUX buffer
-    # streambuf: 2097152     # 2MB stream buffer
+    # Buffer settings for high-throughput
+    # smuxbuf: 8388608       # 8MB session buffer (default)
+    # streambuf: 4194304     # 4MB per-stream buffer (default)
 
 # Optional Forward Error Correction (FEC) - currently disabled
 # Use these only if you need FEC for very lossy networks:

@@ -19,10 +19,10 @@ func (u *UDP) setDefaults(_ string) {
 		u.Block_ = "aes"
 	}
 	if u.Smuxbuf == 0 {
-		u.Smuxbuf = 4 * 1024 * 1024
+		u.Smuxbuf = 8 * 1024 * 1024 // 8 MB session buffer
 	}
 	if u.Streambuf == 0 {
-		u.Streambuf = 2 * 1024 * 1024
+		u.Streambuf = 4 * 1024 * 1024 // 4 MB per-stream buffer
 	}
 }
 

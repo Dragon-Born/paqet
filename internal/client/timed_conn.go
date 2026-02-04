@@ -4,30 +4,42 @@ import (
 	"context"
 	"fmt"
 	"paqet/internal/conf"
+	"paqet/internal/flog"
 	"paqet/internal/protocol"
 	"paqet/internal/socket"
 	"paqet/internal/tnet"
 	"paqet/internal/transport"
+	"sync"
 	"time"
 )
 
 type timedConn struct {
-	cfg      *conf.Conf
-	conn     tnet.Conn
-	expire   time.Time
-	ctx      context.Context
-	protocol string // resolved protocol name
+	cfg         *conf.Conf
+	conn        tnet.Conn
+	expire      time.Time
+	ctx         context.Context
+	protocol    string // resolved protocol name
+	mu          sync.Mutex
+	reconnectCh chan struct{}
 }
 
 func newTimedConn(ctx context.Context, cfg *conf.Conf, proto string) (*timedConn, error) {
 	var err error
-	tc := timedConn{cfg: cfg, ctx: ctx, protocol: proto}
+	tc := &timedConn{
+		cfg:         cfg,
+		ctx:         ctx,
+		protocol:    proto,
+		reconnectCh: make(chan struct{}, 1),
+	}
 	tc.conn, err = tc.createConn()
 	if err != nil {
 		return nil, err
 	}
 
-	return &tc, nil
+	// Start background reconnect loop.
+	go tc.reconnectLoop()
+
+	return tc, nil
 }
 
 func (tc *timedConn) createConn() (tnet.Conn, error) {
@@ -83,7 +95,60 @@ func (tc *timedConn) sendTCPF(conn tnet.Conn) error {
 }
 
 func (tc *timedConn) close() {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	if tc.conn != nil {
 		tc.conn.Close()
+		tc.conn = nil
 	}
+}
+
+// triggerReconnect signals the reconnect loop to reconnect.
+func (tc *timedConn) triggerReconnect() {
+	select {
+	case tc.reconnectCh <- struct{}{}:
+		flog.Debugf("reconnect triggered")
+	default:
+		// Already reconnecting
+	}
+}
+
+// reconnectLoop handles background reconnection.
+func (tc *timedConn) reconnectLoop() {
+	for {
+		select {
+		case <-tc.ctx.Done():
+			return
+		case <-tc.reconnectCh:
+			tc.reconnect()
+		}
+	}
+}
+
+// reconnect closes the current connection and establishes a new one.
+func (tc *timedConn) reconnect() {
+	tc.mu.Lock()
+	if tc.conn != nil {
+		tc.conn.Close()
+		tc.conn = nil
+	}
+	tc.mu.Unlock()
+
+	flog.Infof("reconnecting...")
+
+	// Use waitConn which retries until success.
+	newConn := tc.waitConn()
+
+	tc.mu.Lock()
+	tc.conn = newConn
+	tc.mu.Unlock()
+
+	flog.Infof("reconnected successfully")
+}
+
+// getConn returns the current connection safely.
+func (tc *timedConn) getConn() tnet.Conn {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	return tc.conn
 }

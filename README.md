@@ -77,9 +77,36 @@ You must correctly set the interfaces, IP addresses, MAC addresses, and ports.
 > - **Transport Security**: All transport protocols require identical keys on client/server.
 > - **Configuration**: See "Critical Configuration Points" section below for detailed security requirements
 
-#### Finding Your Network Details
+#### Network Auto-Detection
 
-You'll need to find your network interface name, local IP, and the MAC address of your network's gateway (router).
+paqet can automatically detect your network configuration on clients. Simply use an empty `network: {}` section and paqet will detect:
+
+- **Interface** — Default network interface from the routing table
+- **Local IP** — IPv4 address of the detected interface
+- **Gateway MAC** — MAC address of the default gateway (via ARP cache)
+
+```yaml
+role: "client"
+network: {}  # Auto-detect everything
+server:
+  addr: "10.0.0.100:9999"
+# ... rest of config
+```
+
+Auto-detection works on macOS, Linux, and Windows. You can also partially specify settings — any missing fields will be auto-detected:
+
+```yaml
+network:
+  interface: "en0"  # Specified manually
+  ipv4:
+    # addr and router_mac will be auto-detected
+```
+
+> **Note:** Auto-detection is for clients only. Servers should use explicit configuration for stability.
+
+#### Finding Your Network Details (Manual Configuration)
+
+If auto-detection fails or you prefer manual configuration, you'll need to find your network interface name, local IP, and the MAC address of your network's gateway (router).
 
 **On Linux:**
 
@@ -110,6 +137,16 @@ paqet supports three client modes that can be used independently or combined:
 - **SOCKS5 Proxy** — Applications connect through a local SOCKS5 proxy (per-app configuration required)
 - **Port Forwarding** — Forwards specific local ports to remote targets
 - **TUN (System VPN)** — Creates a virtual network interface that captures all system traffic (no per-app configuration)
+
+#### Auto-Reconnect
+
+The client automatically handles network disruptions:
+
+- **Health checks** — Connections are tested every 30 seconds
+- **Network monitoring** — Detects interface changes, IP changes, and WiFi switches
+- **Automatic reconnection** — Failed connections are re-established in the background
+
+This means the client survives laptop sleep/wake, WiFi network changes, and temporary network outages without manual intervention.
 
 #### Example Client Configuration - SOCKS5 (`config.yaml`)
 
@@ -165,11 +202,7 @@ tun:
   dns: "8.8.8.8"           # DNS server
   auto_route: true         # Auto-configure system routes (default: true)
 
-network:
-  interface: "en0"
-  ipv4:
-    addr: "192.168.1.100:0"
-    router_mac: "aa:bb:cc:dd:ee:ff"
+network: {}  # Auto-detect interface, IP, and gateway MAC
 
 server:
   addr: "10.0.0.100:9999"

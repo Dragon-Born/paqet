@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+
+	"paqet/internal/flog"
 )
 
 type Addr struct {
@@ -25,8 +27,44 @@ type Network struct {
 }
 
 func (n *Network) setDefaults(role string) {
+	// Auto-detect network settings if not configured.
+	if n.needsAutoDetect() {
+		info, err := DetectNetwork()
+		if err != nil {
+			flog.Warnf("network auto-detection failed: %v", err)
+		} else {
+			n.applyAutoDetected(info)
+		}
+	}
+
 	n.PCAP.setDefaults(role)
 	n.TCP.setDefaults()
+}
+
+// needsAutoDetect returns true if any network settings need auto-detection.
+func (n *Network) needsAutoDetect() bool {
+	return n.Interface_ == "" ||
+		(n.IPv4.Addr_ == "" && n.IPv6.Addr_ == "") ||
+		(n.IPv4.RouterMac_ == "" && n.IPv6.RouterMac_ == "")
+}
+
+// applyAutoDetected fills in missing network configuration from auto-detected values.
+func (n *Network) applyAutoDetected(info *NetworkInfo) {
+	if n.Interface_ == "" && info.Interface != "" {
+		n.Interface_ = info.Interface
+		flog.Infof("auto-detected interface: %s", info.Interface)
+	}
+
+	if n.IPv4.Addr_ == "" && info.IPv4Addr != "" {
+		// Use port 0 for auto-assigned random port.
+		n.IPv4.Addr_ = info.IPv4Addr + ":0"
+		flog.Infof("auto-detected IPv4 address: %s", info.IPv4Addr)
+	}
+
+	if n.IPv4.RouterMac_ == "" && info.GatewayMAC != "" {
+		n.IPv4.RouterMac_ = info.GatewayMAC
+		flog.Infof("auto-detected gateway MAC: %s", info.GatewayMAC)
+	}
 }
 
 func (n *Network) validate() []error {

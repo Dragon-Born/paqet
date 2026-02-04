@@ -119,9 +119,13 @@ var _ io.Reader = (*deterministicRand)(nil)
 // buildQUICConfig creates a QUIC configuration.
 func buildQUICConfig(cfg *conf.QUIC) *quic.Config {
 	return &quic.Config{
-		MaxIncomingStreams: int64(cfg.MaxStreams),
-		MaxIdleTimeout:    cfg.IdleTimeout,
-		KeepAlivePeriod:   cfg.IdleTimeout / 3,
-		Allow0RTT:         true,
+		MaxIncomingStreams:             int64(cfg.MaxStreams),
+		MaxIdleTimeout:                 cfg.IdleTimeout,
+		KeepAlivePeriod:                cfg.IdleTimeout / 3,
+		Allow0RTT:                      true,
+		InitialStreamReceiveWindow:     cfg.InitialStreamWindow,
+		MaxStreamReceiveWindow:         cfg.MaxStreamWindow,
+		InitialConnectionReceiveWindow: cfg.InitialConnWindow,
+		MaxConnectionReceiveWindow:     cfg.MaxConnWindow,
 	}
 }
