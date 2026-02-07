@@ -12,19 +12,19 @@ const maxRetries = 10
 func (c *Client) newConn() (tnet.Conn, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	autoExpire := 300
 	tc := c.iter.Next()
-	go tc.sendTCPF(tc.conn)
-	err := tc.conn.Ping(false)
-	if err != nil {
-		flog.Infof("connection lost, retrying....")
-		if tc.conn != nil {
-			tc.conn.Close()
-		}
-		tc.conn = tc.waitConn()
-		tc.expire = time.Now().Add(time.Duration(autoExpire) * time.Second)
+	conn := tc.getConn()
+	if conn == nil {
+		tc.triggerReconnect()
+		return nil, fmt.Errorf("connection unavailable, reconnecting")
 	}
-	return tc.conn, nil
+	if err := conn.Ping(false); err != nil {
+		flog.Infof("connection lost, retrying....")
+		tc.triggerReconnect()
+		return nil, fmt.Errorf("connection lost, reconnecting")
+	}
+	go tc.sendTCPF(conn)
+	return conn, nil
 }
 
 func (c *Client) newStrm() (tnet.Strm, error) {
