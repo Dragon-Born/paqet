@@ -49,8 +49,8 @@ func newAfpacketHandle(cfg *conf.Network) (RawHandle, error) {
 		afpacket.OptFrameSize(afpacketFrameSize),
 		afpacket.OptBlockSize(afpacketBlockSize),
 		afpacket.OptNumBlocks(numBlocks),
-		afpacket.OptPollTimeout(-time.Millisecond), // -1ms → poll timeout of -1 (block forever)
-		afpacket.TPacketVersion2,                   // Use v2 for better compatibility (v3 can crash in containers)
+		afpacket.OptPollTimeout(200*time.Millisecond), // 200ms timeout for graceful shutdown
+		afpacket.TPacketVersion2,                      // Use v2 for better compatibility (v3 can crash in containers)
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AF_PACKET handle on %s: %v", ifaceName, err)
@@ -71,6 +71,9 @@ func (h *afpacketHandle) ZeroCopyReadPacketData() ([]byte, gopacket.CaptureInfo,
 	for {
 		data, ci, err := h.tpacket.ZeroCopyReadPacketData()
 		if err != nil {
+			if err == afpacket.ErrTimeout {
+				return nil, ci, errPollTimeout
+			}
 			return nil, ci, err
 		}
 

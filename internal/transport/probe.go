@@ -23,6 +23,7 @@ type ProbeResult struct {
 
 const probeTimeout = 5 * time.Second
 const probePings = 3
+const pingTimeout = 3 * time.Second
 
 // Probe tests each configured protocol by connecting to the server,
 // sending pings, and measuring RTT. Returns results sorted by RTT (best first).
@@ -124,12 +125,22 @@ func probeOne(proto string, addr *net.UDPAddr, cfg *conf.Transport, newConn func
 		pConn.Close()
 	}()
 
-	// Measure RTT with ping.
+	// Measure RTT with ping. Each ping has a timeout to prevent
+	// blocking indefinitely if the server stops responding.
 	var totalRTT time.Duration
 	var successes int
 	for i := 0; i < probePings; i++ {
 		start := time.Now()
-		if err := conn.Ping(true); err != nil {
+		pingErr := make(chan error, 1)
+		go func() { pingErr <- conn.Ping(true) }()
+		select {
+		case err := <-pingErr:
+			if err != nil {
+				flog.Debugf("  %s: ping %d failed: %v", proto, i+1, err)
+				continue
+			}
+		case <-time.After(pingTimeout):
+			flog.Debugf("  %s: ping %d timed out", proto, i+1)
 			continue
 		}
 		totalRTT += time.Since(start)

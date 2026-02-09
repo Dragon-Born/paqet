@@ -41,6 +41,8 @@ func (c *Conn) AcceptStrm() (tnet.Strm, error) {
 	return c.newStrm(strm), nil
 }
 
+const pingTimeout = 5 * time.Second
+
 func (c *Conn) Ping(wait bool) error {
 	strm, err := c.QConn.OpenStream()
 	if err != nil {
@@ -48,6 +50,10 @@ func (c *Conn) Ping(wait bool) error {
 	}
 	defer strm.Close()
 	if wait {
+		deadline := time.Now().Add(pingTimeout)
+		strm.SetWriteDeadline(deadline)
+		strm.SetReadDeadline(deadline)
+
 		p := protocol.Proto{Type: protocol.PPING}
 		err = p.Write(strm)
 		if err != nil {
