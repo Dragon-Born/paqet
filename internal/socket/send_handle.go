@@ -9,7 +9,6 @@ import (
 	"paqet/internal/conf"
 	"paqet/internal/pkg/hash"
 	"paqet/internal/pkg/iterator"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,12 +28,13 @@ type SendHandle struct {
 	_pad0     [60]byte // pad to 64-byte cache line
 
 	// Read-only config fields (set once at init)
-	tos       uint8
-	ttl       uint8
-	srcPort   uint16
-	baseSeq   uint32
-	baseTS    uint32
-	startTime time.Time
+	tos        uint8
+	ttl        uint8
+	ownsHandle bool // true when created via NewSendHandle (standalone), false when shared
+	srcPort    uint16
+	baseSeq    uint32
+	baseTS     uint32
+	startTime  time.Time
 
 	// Pointer/slice fields
 	handle      RawHandle
@@ -69,18 +69,25 @@ func randRange(lo, hi int) int {
 	return lo + int(n.Int64())
 }
 
+// NewSendHandle creates a standalone SendHandle with its own raw handle.
+// Used by tools like ping that need a send-only handle without a full PacketConn.
 func NewSendHandle(cfg *conf.Network) (*SendHandle, error) {
 	handle, err := newHandle(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open raw handle: %w", err)
 	}
-
-	// SetDirection is not fully supported on Windows Npcap, so skip it
-	if runtime.GOOS != "windows" {
-		if err := handle.SetDirection(DirectionOut); err != nil {
-			return nil, fmt.Errorf("failed to set direction out: %v", err)
-		}
+	sh, err := newSendHandle(cfg, handle)
+	if err != nil {
+		handle.Close()
+		return nil, err
 	}
+	sh.ownsHandle = true
+	return sh, nil
+}
+
+// newSendHandle configures a SendHandle using the given shared raw handle.
+// The handle is NOT owned by SendHandle — the caller (PacketConn) manages its lifecycle.
+func newSendHandle(cfg *conf.Network, handle RawHandle) (*SendHandle, error) {
 
 	synOptions := []layers.TCPOption{
 		{OptionType: layers.TCPOptionKindMSS, OptionLength: 4, OptionData: []byte{0x05, 0xb4}},
@@ -272,7 +279,7 @@ func (h *SendHandle) setClientTCPF(addr net.Addr, f []conf.TCPF) {
 }
 
 func (h *SendHandle) Close() {
-	if h.handle != nil {
+	if h.ownsHandle && h.handle != nil {
 		h.handle.Close()
 	}
 }

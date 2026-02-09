@@ -7,13 +7,13 @@ import (
 	"net"
 	"os"
 	"paqet/internal/conf"
-	"sync"
 	"sync/atomic"
 	"time"
 )
 
 type PacketConn struct {
 	cfg           *conf.Network
+	handle        RawHandle // underlying raw handle, owned by PacketConn
 	sendHandle    *SendHandle
 	recvHandle    *RecvHandle
 	localAddr     *net.UDPAddr
@@ -30,13 +30,23 @@ func New(ctx context.Context, cfg *conf.Network) (*PacketConn, error) {
 		cfg.Port = 32768 + rand.Intn(32768)
 	}
 
-	sendHandle, err := NewSendHandle(cfg)
+	// Create one raw handle shared between send and recv within this PacketConn.
+	// Each PacketConn gets its own independent handle, so multiple connections
+	// don't conflict on the same ring buffer (AF_PACKET) or capture handle (pcap).
+	handle, err := newHandle(cfg)
 	if err != nil {
+		return nil, fmt.Errorf("failed to create raw handle on %s: %v", cfg.Interface.Name, err)
+	}
+
+	sendHandle, err := newSendHandle(cfg, handle)
+	if err != nil {
+		handle.Close()
 		return nil, fmt.Errorf("failed to create send handle on %s: %v", cfg.Interface.Name, err)
 	}
 
-	recvHandle, err := NewRecvHandle(cfg)
+	recvHandle, err := newRecvHandle(cfg, handle)
 	if err != nil {
+		handle.Close()
 		return nil, fmt.Errorf("failed to create receive handle on %s: %v", cfg.Interface.Name, err)
 	}
 
@@ -51,6 +61,7 @@ func New(ctx context.Context, cfg *conf.Network) (*PacketConn, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	conn := &PacketConn{
 		cfg:        cfg,
+		handle:     handle,
 		sendHandle: sendHandle,
 		recvHandle: recvHandle,
 		localAddr:  localAddr,
@@ -116,21 +127,10 @@ func (c *PacketConn) WriteTo(data []byte, addr net.Addr) (n int, err error) {
 func (c *PacketConn) Close() error {
 	c.cancel()
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		if c.sendHandle != nil {
-			c.sendHandle.Close()
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		if c.recvHandle != nil {
-			c.recvHandle.Close()
-		}
-	}()
-	wg.Wait()
+	// Close the underlying raw handle once. Send and recv don't own it.
+	if c.handle != nil {
+		c.handle.Close()
+	}
 
 	return nil
 }

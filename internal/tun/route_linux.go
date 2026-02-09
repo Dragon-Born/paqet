@@ -26,16 +26,18 @@ type linuxRouteManager struct {
 	serverIP    string
 	tunName     string
 	tunAddr     string
+	excludes    []string
 }
 
 func newRouteManager() routeManager {
 	return &linuxRouteManager{}
 }
 
-func (r *linuxRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP, dnsIP string) error {
+func (r *linuxRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP, dnsIP string, excludes []string) error {
 	r.serverIP = serverIP
 	r.tunName = tunName
 	r.tunAddr = tunAddr
+	r.excludes = excludes
 	// TODO: Implement DNS configuration for Linux (modify /etc/resolv.conf or use resolvconf)
 	_ = dnsIP
 
@@ -61,6 +63,14 @@ func (r *linuxRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP
 		return fmt.Errorf("failed to add server route: %w", err)
 	}
 
+	// Route excluded CIDRs through original gateway (e.g., SSH source IPs).
+	for _, cidr := range excludes {
+		if err := run("ip", "route", "add", cidr, "via", gw, "dev", iface); err != nil {
+			return fmt.Errorf("failed to add exclude route for %s: %w", cidr, err)
+		}
+		flog.Infof("TUN route: excluded %s via %s dev %s", cidr, gw, iface)
+	}
+
 	// Replace default route with TUN.
 	if err := run("ip", "route", "replace", "default", "dev", tunName); err != nil {
 		return fmt.Errorf("failed to set default route via TUN: %w", err)
@@ -83,6 +93,11 @@ func (r *linuxRouteManager) removeRoutes() error {
 
 	// Remove server-specific route.
 	save(run("ip", "route", "delete", r.serverIP+"/32"))
+
+	// Remove excluded routes.
+	for _, cidr := range r.excludes {
+		save(run("ip", "route", "delete", cidr))
+	}
 
 	if firstErr != nil {
 		flog.Errorf("TUN route: errors during route cleanup: %v", firstErr)

@@ -8,11 +8,12 @@ import (
 )
 
 type TUN struct {
-	Name_     string `yaml:"name"`
-	Addr      string `yaml:"addr"`
-	MTU       int    `yaml:"mtu"`
-	DNS       string `yaml:"dns"`
-	AutoRoute *bool  `yaml:"auto_route"`
+	Name_     string   `yaml:"name"`
+	Addr      string   `yaml:"addr"`
+	MTU       int      `yaml:"mtu"`
+	DNS       string   `yaml:"dns"`
+	AutoRoute *bool    `yaml:"auto_route"`
+	Exclude   []string `yaml:"exclude"`
 }
 
 func (c *TUN) setDefaults() {
@@ -51,6 +52,17 @@ func (c *TUN) validate() []error {
 
 	if net.ParseIP(c.DNS) == nil {
 		errors = append(errors, fmt.Errorf("tun.dns: invalid IP address %q", c.DNS))
+	}
+
+	for i, e := range c.Exclude {
+		if _, err := netip.ParsePrefix(e); err != nil {
+			// Try as bare IP and normalize to /32 or /128.
+			if addr, err2 := netip.ParseAddr(e); err2 == nil {
+				c.Exclude[i] = netip.PrefixFrom(addr, addr.BitLen()).String()
+			} else {
+				errors = append(errors, fmt.Errorf("tun.exclude[%d]: invalid CIDR or IP %q: %v", i, e, err))
+			}
+		}
 	}
 
 	return errors

@@ -33,6 +33,9 @@ socks5:
 #   mtu: 1400                # TUN MTU (default: 1400, smaller than Ethernet to avoid fragmentation)
 #   dns: "8.8.8.8"           # DNS server
 #   auto_route: true         # Auto-configure system routes
+#   exclude:                 # IPs/CIDRs routed through original gateway (bypass tunnel)
+#     - "203.0.113.50"       # e.g., your SSH source IP (bare IP becomes /32)
+#     - "198.51.100.0/24"    # e.g., office subnet
 
 # Network interface settings
 #

@@ -3,9 +3,10 @@
 # This config is designed for running paqet in a MikroTik container.
 # The container uses AF_PACKET backend (no libpcap required).
 #
-# IMPORTANT: For MikroTik containers, use conn: 1 (single connection).
-# Multiple connections with AF_PACKET in containers can cause instability.
-# Single connection with KCP/QUIC multiplexing provides excellent throughput.
+# RECOMMENDED: For MikroTik containers, use conn: 1 (single connection).
+# Each connection allocates its own AF_PACKET ring buffer, so multiple
+# connections increase memory usage. In memory-constrained containers,
+# a single connection with KCP/QUIC multiplexing provides excellent throughput.
 #
 # Available container images (architecture-specific):
 #   - ghcr.io/dragon-born/paqet:mikrotik-arm64  (for ARM64 devices like hAP ax3, RB5009)
@@ -49,7 +50,7 @@ server:
 
 transport:
   protocol: "auto"        # Auto-select best protocol (KCP, QUIC, or UDP)
-  conn: 1                 # MUST be 1 for MikroTik containers (see note above)
+  conn: 1                 # Recommended for MikroTik containers to save memory (see note above)
 
   kcp:
     mode: "fast"

@@ -75,7 +75,7 @@ func (t *TUN) Start(ctx context.Context) error {
 
 	// Configure system routes and DNS.
 	if *t.cfg.AutoRoute {
-		if err := t.router.addRoutes(t.dev, t.devName, t.cfg.Addr, t.serverIP, t.cfg.DNS); err != nil {
+		if err := t.router.addRoutes(t.dev, t.devName, t.cfg.Addr, t.serverIP, t.cfg.DNS, t.cfg.Exclude); err != nil {
 			t.Close()
 			return fmt.Errorf("failed to configure routes: %w", err)
 		}

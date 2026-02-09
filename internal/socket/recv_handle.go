@@ -20,12 +20,9 @@ type RecvHandle struct {
 	decoded []gopacket.LayerType
 }
 
-func NewRecvHandle(cfg *conf.Network) (*RecvHandle, error) {
-	handle, err := newHandle(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open raw handle: %w", err)
-	}
-
+// newRecvHandle configures a RecvHandle using the given shared raw handle.
+// The handle is NOT owned by RecvHandle — the caller (PacketConn) manages its lifecycle.
+func newRecvHandle(cfg *conf.Network, handle RawHandle) (*RecvHandle, error) {
 	// SetDirection is not fully supported on Windows Npcap, so skip it
 	if runtime.GOOS != "windows" {
 		if err := handle.SetDirection(DirectionIn); err != nil {
@@ -85,7 +82,5 @@ func (h *RecvHandle) Read() ([]byte, net.Addr, error) {
 }
 
 func (h *RecvHandle) Close() {
-	if h.handle != nil {
-		h.handle.Close()
-	}
+	// handle is owned by PacketConn, not closed here.
 }

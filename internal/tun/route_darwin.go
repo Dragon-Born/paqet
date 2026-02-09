@@ -19,15 +19,17 @@ type darwinRouteManager struct {
 	tunAddr        string
 	networkService string   // e.g., "Wi-Fi", "Ethernet"
 	origDNS        []string // original DNS servers
+	excludes       []string
 }
 
 func newRouteManager() routeManager {
 	return &darwinRouteManager{}
 }
 
-func (r *darwinRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP, dnsIP string) error {
+func (r *darwinRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP, dnsIP string, excludes []string) error {
 	r.serverIP = serverIP
 	r.tunAddr = tunAddr
+	r.excludes = excludes
 
 	prefix, err := netip.ParsePrefix(tunAddr)
 	if err != nil {
@@ -52,6 +54,20 @@ func (r *darwinRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverI
 	// Route server IP through original gateway to prevent loop.
 	if err := run("route", "add", "-host", serverIP, gw); err != nil {
 		return fmt.Errorf("failed to add server route: %w", err)
+	}
+
+	// Route excluded CIDRs through original gateway (e.g., SSH source IPs).
+	for _, cidr := range excludes {
+		pfx, _ := netip.ParsePrefix(cidr)
+		if pfx.IsSingleIP() {
+			err = run("route", "add", "-host", pfx.Addr().String(), gw)
+		} else {
+			err = run("route", "add", "-net", cidr, gw)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to add exclude route for %s: %w", cidr, err)
+		}
+		flog.Infof("TUN route: excluded %s via %s", cidr, gw)
 	}
 
 	// Replace default route with TUN.
@@ -98,6 +114,16 @@ func (r *darwinRouteManager) removeRoutes() error {
 
 	// Remove server-specific route.
 	save(run("route", "delete", "-host", r.serverIP))
+
+	// Remove excluded routes.
+	for _, cidr := range r.excludes {
+		pfx, _ := netip.ParsePrefix(cidr)
+		if pfx.IsSingleIP() {
+			save(run("route", "delete", "-host", pfx.Addr().String()))
+		} else {
+			save(run("route", "delete", "-net", cidr))
+		}
+	}
 
 	if firstErr != nil {
 		flog.Errorf("TUN route: errors during route cleanup: %v", firstErr)

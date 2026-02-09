@@ -21,17 +21,19 @@ type windowsRouteManager struct {
 	origGateway string
 	ifIndex     int
 	dnsIP       string
+	excludes    []string
 }
 
 func newRouteManager() routeManager {
 	return &windowsRouteManager{}
 }
 
-func (r *windowsRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP, dnsIP string) error {
+func (r *windowsRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, serverIP, dnsIP string, excludes []string) error {
 	r.serverIP = serverIP
 	r.tunAddr = tunAddr
 	r.tunName = tunName
 	r.dnsIP = dnsIP
+	r.excludes = excludes
 
 	// Get TUN interface index by name.
 	iface, err := net.InterfaceByName(tunName)
@@ -59,6 +61,16 @@ func (r *windowsRouteManager) addRoutes(_ wgtun.Device, tunName, tunAddr, server
 	// Route server IP through original gateway to prevent loop.
 	if err := runWin("route", "add", serverIP, "mask", "255.255.255.255", gw); err != nil {
 		return fmt.Errorf("failed to add server route: %w", err)
+	}
+
+	// Route excluded CIDRs through original gateway (e.g., SSH source IPs).
+	for _, cidr := range excludes {
+		pfx, _ := netip.ParsePrefix(cidr)
+		mask := net.CIDRMask(pfx.Bits(), pfx.Addr().BitLen())
+		if err := runWin("route", "add", pfx.Masked().Addr().String(), "mask", net.IP(mask).String(), gw); err != nil {
+			return fmt.Errorf("failed to add exclude route for %s: %w", cidr, err)
+		}
+		flog.Infof("TUN route: excluded %s via %s", cidr, gw)
 	}
 
 	// Use two /1 routes to capture all traffic, specifying the TUN interface index.
@@ -105,6 +117,12 @@ func (r *windowsRouteManager) removeRoutes() error {
 
 	// Remove server-specific route.
 	save(runWin("route", "delete", r.serverIP))
+
+	// Remove excluded routes.
+	for _, cidr := range r.excludes {
+		pfx, _ := netip.ParsePrefix(cidr)
+		save(runWin("route", "delete", pfx.Masked().Addr().String()))
+	}
 
 	if firstErr != nil {
 		flog.Errorf("TUN route: errors during route cleanup: %v", firstErr)
